@@ -1,3 +1,6 @@
-sdf_to_prism_translation.pyc
-test_icmp.txt
-test_traj.txt
+# Compiled PYC files
+*.pyc
+
+# Temporary test files
+test*.txt
+
