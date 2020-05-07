@@ -265,7 +265,9 @@ class SdfToPrismTranslator:
 		return self.n_particles
 	
 	def get_particle_ids(self):
-		return sorted(list(self.particle_id_set))
+		particle_ids = list(self.particle_id_set)
+		particle_ids.sort()
+		return particle_ids
 	
 	# Translation methods for producing PRISM inputs
 	
