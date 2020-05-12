@@ -17,6 +17,10 @@ import sdf_to_prism_translation as s2p
 MAX_JOBS = 500
 # Amount of time to wait in between checking the number of jobs
 JOB_CHECK_WAIT = 60. # seconds
+# 
+MAX_SBATCH_FAILS = 10
+# Amount of time to wait after a failed sbatch submission
+SBATCH_FAIL_WAIT = 30. # seconds
 
 # Standard output file prefixes for each type of file that needs naming
 ICOMPOSITION_PREFIX = "icomp"
@@ -96,23 +100,30 @@ def main():
 		
 		# Create the PRISM control file for this particle id
 		control_file_name = os.path.join(output_dir, "%s_%08d.json" \
-			% (CONTROL_PREFIX, particle_id)
+			% (CONTROL_PREFIX, particle_id))
 		write_control_file(particle_id, control_file_name)
 		print "Wrote ctrl file: %s" % (control_file_name)
 		
-		# Assemble the command to run PRISM for this particle
-		prism_command_list = list()
-		prism_command_list.append("prism")
-		prism_command_list.extend(["-c", control_file_name])
-		prism_command = " ".join(prism_command_list)
+		# Assemble the job script to run PRISM for this particle
+		job_script_file_name = os.path.join(output_dir, "%s_%08d.sh" \
+			% (JOB_SCRIPT_PREFIX, particle_id))
+		prism_command = ["./prism", "-c", control_file_name]
+		write_prism_job_script(particle_id, job_script_file_name,
+			prism_command)
+		print "Wrote job script: %s" % (job_script_file_name)
 		
-		# Assemble a job script around the PRISM command
-		######
+		# Submit the PRISM job script and make sure it actually submits
+		fail_tally = 0
+		while sbatch(job_script_file_name) != 0:
+			fail_tally += 1
+			if fail_tally >= MAX_SBATCH_FAILS:
+				raise RuntimeError("sbatch submission failed too many times")
+			print "Job submission failed... waiting to try again."
+			time.sleep(SBATCH_FAIL_WAIT)
+		print "Job script submitted via sbatch command."
 		
-		# submit the prism command job script
-		# ensure that the submission happened correctly
-		
-		print 
+		print "Particle id %08d is prepped and submitted." % (particle_id)
+		print
 	
 	print "Main loop complete."
 	t3 = time.time()
@@ -128,6 +139,11 @@ def check_number_of_jobs():
 	"""Use a subprocess command line call to find out how many jobs I have
 	running or queued on the cluster right now. Return the number of jobs."""
 	
+	# It turns out that using squeue in a script loop is discouraged
+	# Maybe tally up the number of jobs that have been submitted so far
+	# Then, count the number of files produced as output from job scripts
+	# Delete them as you go along maybe???
+	
 	raise NotImplementedError
 
 def write_control_file(particle_id, file_name):
@@ -136,6 +152,26 @@ def write_control_file(particle_id, file_name):
 	modifications to that, and then writing a new JSON file."""
 	
 	raise NotImplementedError
+
+def write_prism_job_script(particle_id, file_name, prism_command):
+	""""""
+	
+	raise NotImplementedError
+
+def sbatch(job_script_file_name, print_command=True):
+	"""Use a subprocess to submit a job script to the cluster with sbatch.
+	Return the exit code from the sbatch command."""
+	
+	# Assemble the sbatch command that will submit the job script
+	sbatch_command = ["sbatch", job_script_file_name]
+	
+	# Print the command right before running it if the flag is set
+	if print_command:
+		print "$ " + " ".join(sbatch_command)
+	
+	# Run the command and return its exit code
+	exit_code = subprocess.call(sbatch_command)
+	return exit_code
 
 main()
 
