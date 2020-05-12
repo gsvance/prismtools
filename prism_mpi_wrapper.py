@@ -33,19 +33,21 @@ ASSIGN_TAG = 22
 TERMINATE_SIGNAL = -9999
 
 # Temperature cutoff to use when deciding what particles to postprocess
+# Also useful as a stop condition when running PRISM
 TEMPERATURE_CUTOFF = 1E8 # K
 
 # Standard output file prefixes for each type of file that needs naming
 ICOMPOSITION_PREFIX = "icomp"
 TRAJECTORY_PREFIX = "traj"
 CONTROL_PREFIX = "ctrl"
-PRISM_OUTPUT_PREFIX = "fcomp"
-JOB_STDOUT_PREFIX = "part"
-JOB_STDERR_PREFIX = "part"
+FCOMPOSITION_PREFIX = "fcomp"
+PRISM_STDOUT_PREFIX = "prism"
+PRISM_STDERR_PREFIX = "prism"
+
+# Path to the PRISM install directory
+PRISM_DIR = "/home/gsvance/prism/prism-1.5.0/"
 # Path to the deafult control.json file that came with PRISM
-DEFAULT_CONTROL_JSON = "/home/gsvance/prism/prism-1.5.0/input/control.json"
-# Path to the compiled PRISM executable file
-PRISM_PATH = "/home/gsvance/prism/prism-1.5.0/prism"
+DEFAULT_CONTROL_JSON = os.path.join(PRISM_DIR, "input/control.json")
 
 def main():
 	"""Ultra-simple main function to check the rank of each MPI process and
@@ -200,7 +202,16 @@ def prepare_prism_input_files(particle_id, translator, sdf_dir, output_dir):
 	# Create the PRISM control file for processing this particle
 	control_file_name = os.path.join(output_dir, "%s_%08d.json" \
 		% (CONTROL_PREFIX, particle_id))
-	write_control_file(particle_id, control_file_name)
+	fcomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
+		% (FCOMPOSITION_PREFIX, particle_id)
+	write_control_file(control_file_name, icomposition_file_name,
+		trajectory_file_name, fcomposition_file_name, TEMPERATURE_CUTOFF)
+	
+	# Set file names to collect PRISM's stdout and stderr
+	prism_stdout_file_name = os.path.join(output_dir, "%s_%08d.out" \
+		% (PRISM_STDOUT_PREFIX, particle_id))
+	prism_stderr_file_name = os.path.join(output_dir, "%s_%08d.err" \
+		% (PRISM_STDERR_PREFIX, particle_id))
 	
 	# Return all the file names so they don't need to be reconstructed later
 	# The administrator can send them straight along to another process
@@ -208,14 +219,47 @@ def prepare_prism_input_files(particle_id, translator, sdf_dir, output_dir):
 	file_names["initial composition"] = icomposition_file_name
 	file_names["trajectory"] = trajectory_file_name
 	file_names["control"] = control_file_name
+	file_names["prism stdout"] = prism_stdout_file_name
+	file_names["prism stderr"] = prism_stderr_file_name
 	return file_names
 
-def write_control_file(particle_id, file_name):
-	"""Write the JSON control file for a given particle id using the requested
-	file name. This mostly involves reading the deafult control file, making a
-	few modifications to that, and then writing a new JSON file."""
+def write_control_file(control_file_name, icomposition_file_name,
+	trajectory_file_name, fcomposition_file_name, stop_temp,):
+	"""Write the JSON control file for a single particle using the requested
+	file names and PRISM stop temperature (in kelvin). This mostly involves
+	reading the deafult control file, making a few modifications, and then
+	writing the modified data to a new JSON file."""
 	
-	raise NotImplementedError
+	# Read the JSON data from the default control file that came with PRISM
+	with open(DEFAULT_CONTROL_JSON, "r") as default_control_file:
+		control = json.load(default_control_file)
+	
+	# For now, use the standard nuclear data files
+	#control["nuclear"]["datasets"] = :DEFAULT:
+	
+	# Change the conditions object to direct PRISM to the correct input files
+	control["conditions"]["initial_composition"]["path"] \
+		= icomposition_file_name
+	control["conditions"]["trajectory"]["path"] = trajectory_file_name
+	
+	# Alter the network object to set PRISM's start and stop triggers
+	control["network"]["start"] = {"comment":
+		"Left blank to start calculation at beginning of trajectory file"}
+	stop_T9 = stop_temp * 1E-9  # Convert stop temperature to GK
+	control["network"]["stop"] = {"T9": stop_T9, "comment":
+		"Stops calculation when trajectory reaches %.3E GK" % (stop_T9)}
+	#control["network"]["extent"] = :DEFAULT:
+	
+	# Use the output object to strongly limit PRISM's set of output files
+	for output_key in control["output"].keys():
+		control["output"][output_key]["active"] = False
+	control["output"]["x"]["active"] = True
+	control["output"]["x"]["path"] = fcomposition_file_name
+	
+	# Write the modified JSON data out to create the new control file
+	# Use pretty printing when creating this file to make life easy for me
+	with open(control_file_name, "w") as new_control_file:
+		json.dump(control, new_control_file, indent=2, separators=(",", ": "))
 
 def	prism_minion_main():
 	"""Main function for all the prism minion processes to run. The minions'
@@ -234,6 +278,10 @@ def	prism_minion_main():
 	admin_rank = comm.recv(source=MPI.ANY_SOURCE, tag=REPORT_TAG)
 	print "  Process %d, standing by." % (rank)
 	
+	# Relocate to PRISM's install directory---it likes to run from there
+	# Not whether each process can have a different working directory...
+	os.chdir(PRISM_DIR)
+	
 	# Send your rank to the administrator to request your first assignment
 	comm.send(rank, dest=admin_rank, tag=REQUEST_TAG)
 	order = comm.recv(source=admin_rank, tag=ASSIGN_TAG)
@@ -244,9 +292,18 @@ def	prism_minion_main():
 		# The order will be a dict of file names if not the terminate_signal
 		file_names = order
 		
+		# Open two file streams to catch the reporting from PRISM
+		stdout_file = open(file_names["prism stdout"], "w")
+		stderr_file = open(file_names["prism stderr"], "w")
+		
 		# Run a PRISM subprocess using the files provided to you
-		command = [PRISM_PATH, "-c", file_names["control"]]
-		prism_exit_code = subprocess.call(command)
+		command = ["./prism", "-c", file_names["control"]]
+		prism_exit_code = subprocess.call(command, stdout=stdout_file,
+			stderr=stderr_file)
+		
+		# Close the PRISM output files
+		stdout_file.close()
+		stderr_file.close()
 		
 		# Draw attention to any unhappy exit codes from PRISM
 		if prism_exit_code != 0:
@@ -254,6 +311,11 @@ def	prism_minion_main():
 				% (rank, prism_exit_code)
 			print "ALERT (PROCESS %d): OFFENDING FILES DICT: %s" \
 				% (rank, file_names)
+		
+		# If the exit code was happy, then we don't need to keep the reports
+		if prism_exit_code == 0:
+			os.remove(file_names["prism stdout"])
+			os.remove(file_names["prism stderr"])
 		
 		# Immediately delete any input files that are no longer needed
 		# This isn't just to keep the file system tidy---if we don't do this,
