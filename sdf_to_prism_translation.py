@@ -1,6 +1,6 @@
 # Python code for translating SNSPH SDF data into formats expected by PRISM
 
-# Last modified 11 May 2020 by Greg Vance
+# Last modified 12 May 2020 by Greg Vance
 
 import os.path
 import glob
@@ -8,8 +8,8 @@ import numpy as np
 import sdfpy
 
 # The mass and radius of the sun in CGS units according to SNSPH
-MSUN = 1.9889E33
-RSUN = 6.955E10
+MSUN = 1.9889E+33 # g
+RSUN = 6.955E+10 # cm
 
 class Abundances:
 	"""Class to handle reading of the abun.dat file format and provide access
@@ -152,9 +152,7 @@ class ZoneToPartId:
 		with open(self.file_name, "r") as ztpi:
 			for line in ztpi:
 				stripped = line.strip()
-				if stripped == "":
-					continue
-				else:
+				if stripped != "":
 					pair = [int(string) for string in stripped.split()]
 					assert len(pair) == 2
 					particle_id, zone = tuple(pair)
@@ -268,7 +266,7 @@ class SdfToPrismTranslator:
 		particle_ids.sort()
 		return particle_ids
 	
-	# Method for imposing a temperature cutoff
+	# Method for imposing a temperature cutoff on the particles
 	
 	def get_particle_ids_with_temp_cutoff(self, temp_cutoff):
 		"""Return a list of all particle ids whose trajectories reach or
@@ -324,8 +322,6 @@ class SdfToPrismTranslator:
 		from each SDF along with that SDF's simulation time. PRISM trajectory
 		files are allowed to begin with a single HEADER line of arbitrary
 		length that will be ignored by PRISM."""
-		
-		global MSUN, RSUN
 		
 		# Default HEADER if none is provided
 		if HEADER is None:

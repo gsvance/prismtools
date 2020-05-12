@@ -12,15 +12,19 @@
 
 # Last modified 12 May 2020 by Greg Vance
 
-from mpi4py import MPI  # Provides Python bindings for MPI
+# Start by importing the Python MPI bindings
+from mpi4py import MPI
 
+# Then import system utility packages
 import sys
 import os
 import time
 
+# Other Python packages I will need
 import json
 import subprocess
 
+# Finally, import my custom classes for translating the data
 import sdf_to_prism_translation as s2p
 
 # Rank of the MPI process that will administrate all other processes
@@ -33,8 +37,8 @@ ASSIGN_TAG = 22
 TERMINATE_SIGNAL = -9999
 
 # Temperature cutoff to use when deciding what particles to postprocess
-# Also useful as a stop condition when running PRISM
-TEMPERATURE_CUTOFF = 1E8 # K
+# Also useful as a stop condition when running PRISM jobs
+TEMPERATURE_CUTOFF = 1E+8 # K
 
 # Standard output file prefixes for each type of file that needs naming
 ICOMPOSITION_PREFIX = "icomp"
@@ -44,16 +48,20 @@ FCOMPOSITION_PREFIX = "fcomp"
 PRISM_STDOUT_PREFIX = "prism"
 PRISM_STDERR_PREFIX = "prism"
 
-# Path to the PRISM install directory
+# Path to my Agave PRISM install directory
 PRISM_DIR = "/home/gsvance/prism/prism-1.5.0/"
-# Path to the deafult control.json file that came with PRISM
+# Path to the default control.json file that came with PRISM
 DEFAULT_CONTROL_JSON = os.path.join(PRISM_DIR, "input/control.json")
+
+# Flags to set for debug testing
+PARTICLES_LIMIT = 4  # stop after processing some number of particles
+DELETE_FILES = False  # whether to clean up the input files or not
 
 def main():
 	"""Ultra-simple main function to check the rank of each MPI process and
 	then direct the process to run one of the other two "main" functions."""
 	
-	# Find the rank of the MPI process
+	# Find the rank of this MPI process
 	comm = MPI.COMM_WORLD
 	rank = comm.Get_rank()
 	
@@ -113,8 +121,8 @@ def administrator_main():
 	n_particles = len(particle_ids)
 	print "SDF directory contains data for %d particles." % (n_particles)
 	
-	# Impose temperature cutoff to limit the number of PRISM runs
-	# This filtering can also take a while to happen....
+	# Impose a temperature cutoff to limit the number of PRISM runs
+	# This temperature filtering can also take a while to happen....
 	print "Imposing temperature cut at %.3E kelvin..." % (TEMPERATURE_CUTOFF)
 	hot_particle_ids \
 		= translator.get_particle_ids_with_temp_cutoff(TEMPERATURE_CUTOFF)
@@ -128,7 +136,7 @@ def administrator_main():
 		if other_rank != rank:
 			comm.send(rank, dest=other_rank, tag=REPORT_TAG)
 	
-	# Report total the amount of time that the setup consumed
+	# Report the total amount of time that the setup consumed
 	print
 	print "Administrator setup complete."
 	t2 = time.time()
@@ -142,6 +150,7 @@ def administrator_main():
 	# Run the main loop over every particle id that needs processing
 	print 
 	print "Starting main loop over particle ids..."
+	sent = 0
 	for hot_particle_id in hot_particle_ids:
 		
 		# Prepare the PRISM input files for this particle id
@@ -149,7 +158,7 @@ def administrator_main():
 		print "Preparing PRISM input files for particle id %08d..." \
 			% (hot_particle_id)
 		file_names = prepare_prism_input_files(hot_particle_id, translator,
-			sdf_dir, output_dir)
+			output_dir)
 		
 		# Wait for another process to request a job and then give it to them
 		print "Files prepared. Waiting for an available process..."
@@ -157,6 +166,15 @@ def administrator_main():
 		comm.send(file_names, dest=assign_rank, tag=ASSIGN_TAG)
 		print "Particle id %08d was assigned to process %d." \
 			% (hot_particle_id, assign_rank)
+		
+		# Limit the number of particles processed if the debug option is set
+		sent += 1
+		if PARTICLES_LIMIT is not None and sent >= PARTICLES_LIMIT:
+			print
+			print "Administrator reached debug particles limit of %d." \
+				% (PARTICLES_LIMIT)
+			print "Breaking from main loop now."
+			break
 	
 	# Wait for the remaining processes to finish, then terminate them
 	print
@@ -179,7 +197,7 @@ def administrator_main():
 	print "Execution is complete. Bye!"
 	print "Process %d terminated." % (rank)
 
-def prepare_prism_input_files(particle_id, translator, sdf_dir, output_dir):
+def prepare_prism_input_files(particle_id, translator, output_dir):
 	"""Given a particle id, prepare all of the necessary input files that
 	PRISM needs in order to postprocess yields for that particle. Return a
 	dict of paths to the newly created files. Produces the following files:
@@ -203,7 +221,7 @@ def prepare_prism_input_files(particle_id, translator, sdf_dir, output_dir):
 	control_file_name = os.path.join(output_dir, "%s_%08d.json" \
 		% (CONTROL_PREFIX, particle_id))
 	fcomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
-		% (FCOMPOSITION_PREFIX, particle_id)
+		% (FCOMPOSITION_PREFIX, particle_id))
 	write_control_file(control_file_name, icomposition_file_name,
 		trajectory_file_name, fcomposition_file_name, TEMPERATURE_CUTOFF)
 	
@@ -215,16 +233,18 @@ def prepare_prism_input_files(particle_id, translator, sdf_dir, output_dir):
 	
 	# Return all the file names so they don't need to be reconstructed later
 	# The administrator can send them straight along to another process
+	# Send the particle id along as well, even though it's not a file name
 	file_names = dict()
 	file_names["initial composition"] = icomposition_file_name
 	file_names["trajectory"] = trajectory_file_name
 	file_names["control"] = control_file_name
 	file_names["prism stdout"] = prism_stdout_file_name
 	file_names["prism stderr"] = prism_stderr_file_name
+	file_names["particle id"] = particle_id
 	return file_names
 
 def write_control_file(control_file_name, icomposition_file_name,
-	trajectory_file_name, fcomposition_file_name, stop_temp,):
+	trajectory_file_name, fcomposition_file_name, stop_temp=None):
 	"""Write the JSON control file for a single particle using the requested
 	file names and PRISM stop temperature (in kelvin). This mostly involves
 	reading the deafult control file, making a few modifications, and then
@@ -245,9 +265,13 @@ def write_control_file(control_file_name, icomposition_file_name,
 	# Alter the network object to set PRISM's start and stop triggers
 	control["network"]["start"] = {"comment":
 		"Left blank to start calculation at beginning of trajectory file"}
-	stop_T9 = stop_temp * 1E-9  # Convert stop temperature to GK
-	control["network"]["stop"] = {"T9": stop_T9, "comment":
-		"Stops calculation when trajectory reaches %.3E GK" % (stop_T9)}
+	if stop_temp is not None:
+		stop_T9 = stop_temp * 1E-9  # Convert stop temperature to GK
+		control["network"]["stop"] = {"T9": stop_T9, "comment":
+			"Stops calculation when trajectory reaches %.3E GK" % (stop_T9)}
+	else:
+		control["network"]["stop"] = {"comment":
+			"Left blank to stop calculation at end of trajectory file"}
 	#control["network"]["extent"] = :DEFAULT:
 	
 	# Use the output object to strongly limit PRISM's set of output files
@@ -309,20 +333,19 @@ def	prism_minion_main():
 		if prism_exit_code != 0:
 			print "ALERT (PROCESS %d): PRISM RETURNED BAD EXIT CODE %d" \
 				% (rank, prism_exit_code)
-			print "ALERT (PROCESS %d): OFFENDING FILES DICT: %s" \
-				% (rank, file_names)
-		
-		# If the exit code was happy, then we don't need to keep the reports
-		if prism_exit_code == 0:
-			os.remove(file_names["prism stdout"])
-			os.remove(file_names["prism stderr"])
+			print "ALERT (PROCESS %d): OFFENDING PARTICLE ID: %08d" \
+				% (rank, file_names["particle id"])
 		
 		# Immediately delete any input files that are no longer needed
 		# This isn't just to keep the file system tidy---if we don't do this,
 		# we could wind up dealing with literally *millions* of leftover files
-		os.remove(file_names["initial composition"])
-		os.remove(file_names["trajectory"])
-		os.remove(file_names["control"])
+		# If the exit code was unhappy, then we might want to keep the files
+		if prism_exit_code == 0 and DELETE_FILES
+			os.remove(file_names["initial composition"])
+			os.remove(file_names["trajectory"])
+			os.remove(file_names["control"])
+			os.remove(file_names["prism stdout"])
+			os.remove(file_names["prism stderr"])
 		
 		# Done! Request another assignment from the administrator
 		comm.send(rank, dest=admin_rank, tag=REQUEST_TAG)
