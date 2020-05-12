@@ -243,9 +243,8 @@ class SdfToPrismTranslator:
 		self.sdf_list.sort(key=lambda x: x.parameters["tpos"])
 		
 		# Construct a set object containing all particle ids from the SDFs
-		self.particle_id_set = set()
-		for sdf in self.sdf_list:
-			self.particle_id_set.update(sdf["ident"])
+		self.particle_id_set = set(reduce(np.union1d, [sdf["ident"] for sdf \
+			in self.sdf_list]))
 		self.n_particles = len(self.particle_id_set)
 		
 		# Read the other necesary files using the classes for them
@@ -279,21 +278,13 @@ class SdfToPrismTranslator:
 		occur. Only the particle ids returned by this method actually need to
 		be postprocessed by PRISM."""
 		
-		# For each particle id present, check its temperature in every SDF
-		# If we find a single SDF with high enough temperature, save the id
-		# Once we find one SDF where this is true, we can check the next id
-		hot_particle_ids_list = list()
-		for particle_id in self.particle_id_set:
-			particle_index = 0
-			for sdf in self.sdf_list:
-				if sdf["ident"][particle_index] != particle_id:
-					index_array = np.argwhere(sdf["ident"] == particle_id)
-					assert index_array.size == 1
-					particle_index = index_array[0]
-				if sdf["temp"][particle_index] >= temp_cutoff:
-					hot_particle_ids_list.append(particle_id)
-					break
+		# For each SDF, pull out every particle id that reaches the cutoff
+		hot_particle_ids_set = set()
+		for sdf in self.sdf_list:
+			is_hot = (sdf["temp"] >= temp_cutoff)
+			hot_particle_ids_set.update(sdf["ident"][is_hot])
 		
+		hot_particle_ids_list = list(hot_particle_ids_set)
 		hot_particle_ids_list.sort()
 		return hot_particle_ids_list
 	
