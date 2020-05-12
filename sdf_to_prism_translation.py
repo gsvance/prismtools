@@ -1,6 +1,6 @@
 # Python code for translating SNSPH SDF data into formats expected by PRISM
 
-# Last modified 6 May 2020 by Greg Vance
+# Last modified 11 May 2020 by Greg Vance
 
 import os.path
 import glob
@@ -362,7 +362,7 @@ class SdfToPrismTranslator:
 		trajectory_tuples = list()
 		for tpos, temp, rho in sdf_trajectory_tuples:
 			t = tpos * 100.0  # s per SNSPH_TIME
-			T9 = temp * 1E9  # GK per SNSPH_TEMP
+			T9 = temp * 1E-9  # GK per SNSPH_TEMP
 			RHO = rho * (1E-6 * MSUN * RSUN ** -3)  # g/cm3 per SNSPH_DENSITY
 			trajectory_tuples.append((t, T9, RHO))
 		
