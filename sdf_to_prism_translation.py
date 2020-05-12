@@ -284,10 +284,12 @@ class SdfToPrismTranslator:
 		# Once we find one SDF where this is true, we can check the next id
 		hot_particle_ids_list = list()
 		for particle_id in self.particle_id_set:
+			particle_index = 0
 			for sdf in self.sdf_list:
-				index_array = np.argwhere(sdf["ident"] == particle_id)
-				assert index_array.size == 1
-				particle_index = index_array[0]
+				if sdf["ident"][particle_index] != particle_id:
+					index_array = np.argwhere(sdf["ident"] == particle_id)
+					assert index_array.size == 1
+					particle_index = index_array[0]
 				if sdf["temp"][particle_index] >= temp_cutoff:
 					hot_particle_ids_list.append(particle_id)
 					break
@@ -347,11 +349,13 @@ class SdfToPrismTranslator:
 		
 		# Pull the tpos value, particle temp, and particle rho from each SDF
 		sdf_trajectory_tuples = list()
+		particle_index = 0
 		for sdf in self.sdf_list:
 			tpos = sdf.parameters["tpos"]
-			index_array = np.argwhere(sdf["ident"] == particle_id)
-			assert index_array.size == 1
-			particle_index = index_array[0]
+			if sdf["ident"][particle_index] != particle_id:
+				index_array = np.argwhere(sdf["ident"] == particle_id)
+				assert index_array.size == 1
+				particle_index = index_array[0]
 			temp = sdf["temp"][particle_index]
 			rho = sdf["rho"][particle_index]
 			sdf_trajectory_tuples.append((tpos, temp, rho))
