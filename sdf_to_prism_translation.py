@@ -269,6 +269,32 @@ class SdfToPrismTranslator:
 		particle_ids.sort()
 		return particle_ids
 	
+	# Method for imposing a temperature cutoff
+	
+	def get_particle_ids_with_temp_cutoff(self, temp_cutoff):
+		"""Return a list of all particle ids whose trajectories reach or
+		exceed the given temperature cutoff value (in kelvin). For high enough
+		temperature cutoff values (e.g., 1e8 K), this method can be used to
+		filter out particles that never get hot enough for nucleosynthesis to
+		occur. Only the particle ids returned by this method actually need to
+		be postprocessed by PRISM."""
+		
+		# For each particle id present, check its temperature in every SDF
+		# If we find a single SDF with high enough temperature, save the id
+		# Once we find one SDF where this is true, we can check the next id
+		hot_particle_ids_list = list()
+		for particle_id in self.particle_id_set:
+			for sdf in self.sdf_list:
+				index_array = np.argwhere(sdf["ident"] == particle_id)
+				assert index_array.size == 1
+				particle_index = index_array[0]
+				if sdf["temp"][particle_index] >= temp_cutoff:
+					hot_particle_ids_list.append(particle_id)
+					break
+		
+		hot_particle_ids_list.sort()
+		return hot_particle_ids_list
+	
 	# Translation methods for producing PRISM inputs
 	
 	def write_initial_composition_file(self, particle_id, output_file_name):
@@ -323,9 +349,9 @@ class SdfToPrismTranslator:
 		sdf_trajectory_tuples = list()
 		for sdf in self.sdf_list:
 			tpos = sdf.parameters["tpos"]
-			particle_index_array = np.argwhere(sdf["ident"] == particle_id)
-			assert particle_index_array.size == 1
-			particle_index = particle_index_array[0]
+			index_array = np.argwhere(sdf["ident"] == particle_id)
+			assert index_array.size == 1
+			particle_index = index_array[0]
 			temp = sdf["temp"][particle_index]
 			rho = sdf["rho"][particle_index]
 			sdf_trajectory_tuples.append((tpos, temp, rho))
