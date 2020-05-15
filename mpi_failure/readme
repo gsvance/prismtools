@@ -1,0 +1,23 @@
+The MPI approach to this problem did not work.
+I've included this explanation and the other files here for posterity.
+
+Turns out that MPI processes are not permitted to spawn child processes.
+This is a problem because that's how Python's subprocess package runs PRISM.
+If we can't spawn child processes, then we can't use Python to run PRISM.
+If we can't run PRISM, then none of this will work.
+
+MPI has some confusing support for spawning more MPI processes.
+That won't work either because the children have to be MPI-enabled.
+So we can't just spawn PRISM processes that won't acknowledge MPI.
+
+Solution:
+Approach the problem in Python with trivial paralleliztion and no MPI.
+The PRISM workers don't *really* have to talk to one another to do their job.
+Set them up with assignments ahead of time so no communication is needed.
+
+Otherwise, I'll need to rewrite everything from the start in C or Fortran.
+It will be a lot harder in those languages, but I'll be able to run PRISM.
+Might have to update PRISM's source code a bit to make it run as a function.
+Then I can call PRISM from C or Fortran to run without a new child process.
+I want to avoid this option if I can since it would be a *lot* of extra work.
+
