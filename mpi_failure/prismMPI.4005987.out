@@ -1,0 +1,58 @@
+  Process 1, standing by.
+ALERT (PROCESS 1): PRISM RETURNED BAD EXIT CODE 127
+ALERT (PROCESS 1): OFFENDING PARTICLE ID: 00000000
+ALERT (PROCESS 1): PRISM RETURNED BAD EXIT CODE 127
+ALERT (PROCESS 1): OFFENDING PARTICLE ID: 00000003
+  Process 1 is terminating.
+  Process 2, standing by.
+ALERT (PROCESS 2): PRISM RETURNED BAD EXIT CODE 127
+ALERT (PROCESS 2): OFFENDING PARTICLE ID: 00000002
+ALERT (PROCESS 2): PRISM RETURNED BAD EXIT CODE 127
+ALERT (PROCESS 2): OFFENDING PARTICLE ID: 00000006
+  Process 2 is terminating.
+Administrator process 0 was initialized successfully.
+<< Python Wrapper Script for PRISM Parallelization >>
+Beginning administrator setup...
+
+Detected 2 other processes for running PRISM jobs.
+Parsed input SDF directory path: /home/gsvance/vconv_3d_asym_data/vconv_snsph_sdf_data/
+Parsed output directory path: /home/gsvance/vconv_3d_asym_data/vconv_prism_postprocess/
+Initializing SDF-to-PRISM data translator object...
+Translator object is prepared and ready to proceed.
+SDF directory contains data for 945628 particles.
+Imposing temperature cut at 1.000E+08 kelvin...
+Found 368592 particles that will need to be processed by PRISM.
+Signaling all other processes to report in...
+
+Administrator setup complete.
+Setup took 2.181 minutes to finish.
+
+Starting main loop over particle ids...
+
+Preparing PRISM input files for particle id 00000000...
+Files prepared. Waiting for an available process...
+Particle id 00000000 was assigned to process 1.
+
+Preparing PRISM input files for particle id 00000002...
+Files prepared. Waiting for an available process...
+Particle id 00000002 was assigned to process 2.
+
+Preparing PRISM input files for particle id 00000003...
+Files prepared. Waiting for an available process...
+Particle id 00000003 was assigned to process 1.
+
+Preparing PRISM input files for particle id 00000006...
+Files prepared. Waiting for an available process...
+Particle id 00000006 was assigned to process 2.
+
+Administrator reached debug particles limit of 4.
+Breaking from main loop now.
+
+Main loop complete. Waiting for processes to finish...
+
+All non-administrator processes have terminated.
+PRISM processing took 0.025 minutes to run.
+Setup and processing took 2.206 minutes total.
+
+Execution is complete. Bye!
+Process 0 terminated.

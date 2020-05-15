@@ -1,8 +1,7 @@
 # Compiled PYC files
 *.pyc
 
-# Temporary test files
+# Test files
 test_*.*
-*mtest*
 output/
 

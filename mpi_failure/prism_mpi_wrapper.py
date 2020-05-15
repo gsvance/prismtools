@@ -12,8 +12,12 @@
 
 # Last modified 12 May 2020 by Greg Vance
 
-# Start by importing the Python MPI bindings
+# Start by importing the Python MPI bindings and setting that up
 from mpi4py import MPI
+comm = MPI.COMM_WORLD
+comm.Set_errhandler(MPI.ERRORS_ARE_FATAL)
+rank = comm.Get_rank()
+size = comm.Get_size()
 
 # Then import system utility packages
 import sys
@@ -61,9 +65,8 @@ def main():
 	"""Ultra-simple main function to check the rank of each MPI process and
 	then direct the process to run one of the other two "main" functions."""
 	
-	# Find the rank of this MPI process
-	comm = MPI.COMM_WORLD
-	rank = comm.Get_rank()
+	# MPI process rank from global namespace
+	global rank
 	
 	# One process is the administrator---it will run the show
 	# It manages the input data and farms out PRISM jobs to other processes
@@ -84,10 +87,8 @@ def administrator_main():
 	  - Use a translator object to produce PRISM input files
 	  - Send particle ids to minion processes who will actually run PRISM"""
 	
-	# Set the basic MPI variables
-	comm = MPI.COMM_WORLD
-	rank = comm.Get_rank()
-	size = comm.Get_size()
+	# MPI variables from global namespace
+	global comm, rank, size
 	
 	print "Administrator process %d was initialized successfully." % (rank)
 	print "<< Python Wrapper Script for PRISM Parallelization >>"
@@ -292,10 +293,8 @@ def	prism_minion_main():
 	  - Run the actual PRISM subprocesses
 	  - Clean up any leftover files that might overwhelm the file system"""
 	
-	# Set the basic MPI variables
-	comm = MPI.COMM_WORLD
-	rank = comm.Get_rank()
-	size = comm.Get_size()
+	# MPI variables from global namespace
+	global comm, rank, size
 	
 	# Wait to receive the administrator's initial order to report in
 	# This might take some time since the administrator has to set up first
@@ -323,7 +322,7 @@ def	prism_minion_main():
 		# Run a PRISM subprocess using the files provided to you
 		command = ["./prism", "-c", file_names["control"]]
 		prism_exit_code = subprocess.call(command, stdout=stdout_file,
-			stderr=stderr_file)
+			stderr=stderr_file, shell=True)
 		
 		# Close the PRISM output files
 		stdout_file.close()
@@ -340,7 +339,7 @@ def	prism_minion_main():
 		# This isn't just to keep the file system tidy---if we don't do this,
 		# we could wind up dealing with literally *millions* of leftover files
 		# If the exit code was unhappy, then we might want to keep the files
-		if prism_exit_code == 0 and DELETE_FILES
+		if prism_exit_code == 0 and DELETE_FILES:
 			os.remove(file_names["initial composition"])
 			os.remove(file_names["trajectory"])
 			os.remove(file_names["control"])

@@ -12,12 +12,12 @@
 module purge
 module load python/2.7.9
 module load numpy/python-2x
-module load intel/2017x
+#module load intel/2017x
 
 TOOLSDIR="/home/gsvance/prismtools/"
 SDFDIR="/home/gsvance/vconv_3d_asym_data/vconv_snsph_sdf_data/"
-OUTDIR="/home/gsvance/vconv_3d_aysm_data/vconv_prism_postprocess/"
+OUTDIR="/home/gsvance/vconv_3d_asym_data/vconv_prism_postprocess/"
 
 cd ${TOOLSDIR}
-mpiexec -np 3 python prism_mpi_wrapper.py ${SDFDIR} ${OUTDIR}
+mpiexec -n 3 python prism_mpi_wrapper.py ${SDFDIR} ${OUTDIR}
 
