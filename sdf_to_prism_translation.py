@@ -1,11 +1,16 @@
-# Python code for translating SNSPH SDF data into formats expected by PRISM
+# Python code for translating SNSPH SDF data into input files for PRISM
+# A necessary step if we want to use PRISM for postprocessing SNSPH particles
 
-# Last modified 12 May 2020 by Greg Vance
+# Last modified 15 May 2020 by Greg Vance
 
 import os.path
 import glob
 import numpy as np
 import sdfpy
+
+# Assumed standard file names for files supporting the SDF data
+ABUN_FILE_NAME = "abun.dat"
+ZTPI_FILE_NAME = "zonetopartid.dat"
 
 # The mass and radius of the sun in CGS units according to SNSPH
 MSUN = 1.9889E+33 # g
@@ -32,13 +37,13 @@ class Abundances:
 		self.neutrons = [int(N) for N in header[3].split()]
 		self.isotopes = [iso for iso in header[4].split() if iso != "r"]
 		
-		# Enlist numpy to process all of the float data after the header
-		# The numbers in these files always seem to be single-precision
-		# Don't waste RAM using dtype="float64" for this task
+		# Enlist Numpy to process all of the float data following the header
+		# The numbers in these files always seem to be single-precision,
+		# so don't waste tons of RAM using dtype="float64" for this task
 		file_array = np.loadtxt(self.file_name, "float32", skiprows=5)
 		
 		# Extract the first column, which is the list of zone radii
-		# The rest of the columns should contain abundance data
+		# The rest of the columns should all contain abundance data
 		self.radii = np.copy(file_array[:,0])
 		self.abun_data = np.copy(file_array[:,1:])
 		del file_array
@@ -50,10 +55,10 @@ class Abundances:
 		assert self.radii.shape == (self.n_zones,)
 		assert self.abun_data.shape == (self.n_zones, self.network_size)
 		
-		# Produce a list with tuples containing both protons and neutrons
-		self.protons_neutrons = list(zip(self.protons, self.neutrons))
+		# Produce a list of tuples containing both protons and neutrons
+		self.protons_neutrons = zip(self.protons, self.neutrons)
 		
-		# Produce a list of atomic mass numbers A
+		# Produce another list containing the atomic mass numbers A
 		self.atomic_masses = [sum(pair) for pair in self.protons_neutrons]
 	
 	# Simple access methods
@@ -109,31 +114,26 @@ class Abundances:
 		tuple_format parameter specifies the desired format of each list
 		entry. For example, the tuple ('iso', 'Z', 'N', 'A', 'X', 'Y')."""
 		
-		zone_abun = list()
-		for i in xrange(self.network_size):
+		columns = list()
+		for item in tuple_format:
 			
-			next_entry = list()
-			for string in tuple_format:
-				if string == "iso":
-					next_entry.append(self.isotopes[i])
-				elif string == "Z":
-					next_entry.append(self.protons[i])
-				elif string == "N":
-					next_entry.append(self.neutrons[i])
-				elif string == "A":
-					next_entry.append(self.atomic_masses[i])
-				elif string == "X":
-					next_entry.append(self.abun_data[zone,i])
-				elif string == "Y":
-					next_entry.append(self.abun_data[zone,i] \
-						/ self.atomic_masses[i])
-				else:
-					raise ValueError("tuple_format has unidentified" \
-						" quantity \"%s\"" % (string))
-				
-			zone_abun.append(tuple(next_entry))
-		
-		return zone_abun
+			if item == "iso":
+				columns.append(self.isotopes)
+			elif item == "Z":
+				columns.append(self.protons)
+			elif item == "N":
+				columns.append(self.neutrons)
+			elif item == "A":
+				columns.append(self.atomic_masses)
+			elif item == "X":
+				columns.append(self.abun_data[zone,:])
+			elif item == "Y":
+				columns.append(self.abun_data[zone,:] / self.atomic_masses)
+			else:
+				raise ValueError("tuple_format contains unknown item: %s" \
+					% (repr(item)))
+			
+		return zip(*columns)
 
 class ZoneToPartId:
 	"""Class to handle reading of the zonetopartid.dat file format and provide
@@ -207,8 +207,9 @@ class ZoneToPartId:
 		return zone_particle_ids
 
 class SdfToPrismTranslator:
-	"""Class to handle translating a directory of SNSPH SDF data to inputs for
-	PRISM in order to facilitate the postprocessing of yields."""
+	"""Primary translator class to handle translating a directory of SNSPH SDF
+	data to create inputs for PRISM in order to facilitate the postprocessing
+	of yields."""
 	
 	def __init__(self, sdf_dir):
 		
@@ -231,8 +232,8 @@ class SdfToPrismTranslator:
 		self.n_sdfs = len(self.sdf_name_list)
 		
 		# Assume that the other necessary files have standard names
-		self.abun_file_name = os.path.join(self.sdf_dir, "abun.dat")
-		self.ztpi_file_name = os.path.join(self.sdf_dir, "zonetopartid.dat")
+		self.abun_file_name = os.path.join(self.sdf_dir, STD_ABUN_FILE_NAME)
+		self.ztpi_file_name = os.path.join(self.sdf_dir, STD_ZTPI_FILE_NAME)
 		
 		# Open all the SDF files simultaneously and keep them in a list
 		# I might need to re-think this strategy if it requires too much RAM
