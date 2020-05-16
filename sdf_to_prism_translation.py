@@ -9,8 +9,8 @@ import numpy as np
 import sdfpy
 
 # Assumed standard file names for files supporting the SDF data
-ABUN_FILE_NAME = "abun.dat"
-ZTPI_FILE_NAME = "zonetopartid.dat"
+STD_ABUN_FILE_NAME = "abun.dat"
+STD_ZTPI_FILE_NAME = "zonetopartid.dat"
 
 # The mass and radius of the sun in CGS units according to SNSPH
 MSUN = 1.9889E+33 # g
@@ -18,7 +18,8 @@ RSUN = 6.955E+10 # cm
 
 class Abundances:
 	"""Class to handle reading of the abun.dat file format and provide access
-	methods for the data."""
+	methods for the data.
+	"""
 	
 	def __init__(self, file_name):
 		
@@ -26,20 +27,22 @@ class Abundances:
 		self.file_name = file_name
 		if not os.path.exists(self.file_name):
 			raise ValueError("abun file does not exist: %s" \
-				% (self.file_name))
+				% (repr(self.file_name)))
 		
 		# The first five lines are the header info, so start with those
-		with open(self.file_name, "r") as abun:
-			header = [abun.readline().strip() for i in xrange(5)]
+		# Convert all of this data to Numpy arrays where possible
+		with open(self.file_name, "r") as abun_file:
+			header = [abun_file.readline().strip() for h in xrange(5)]
 		self.network_size = int(header[0])
 		self.n_zones = int(header[1])
-		self.protons = [int(Z) for Z in header[2].split()]
-		self.neutrons = [int(N) for N in header[3].split()]
-		self.isotopes = [iso for iso in header[4].split() if iso != "r"]
+		self.protons = np.array(header[2].split(), "int32")
+		self.neutrons = np.array(header[3].split(), "int32")
+		self.isotopes = np.array([iso for iso in header[4].split() \
+			if iso != "r"])
 		
-		# Enlist Numpy to process all of the float data following the header
+		# Use Numpy to process all of the float data following the header
 		# The numbers in these files always seem to be single-precision,
-		# so don't waste tons of RAM using dtype="float64" for this task
+		# so don't waste RAM by using the default float64 for this task
 		file_array = np.loadtxt(self.file_name, "float32", skiprows=5)
 		
 		# Extract the first column, which is the list of zone radii
@@ -49,17 +52,18 @@ class Abundances:
 		del file_array
 		
 		# Before proclaiming success, go ahead and sanity-check *everything*
-		assert len(self.protons) == self.network_size
-		assert len(self.neutrons) == self.network_size
-		assert len(self.isotopes) == self.network_size
+		# The first two and last two tests check the file for self-consistency
+		# The middle two tests ensure that the array of isotopes is unique
+		assert self.protons.size == self.network_size
+		assert self.neutrons.size == self.network_size
+		assert np.unique(np.column_stack([self.protons, self.neutrons]), \
+			axis=0).shape == (self.network_size, 2)
+		assert np.unique(self.isotopes).size == self.network_size
 		assert self.radii.shape == (self.n_zones,)
 		assert self.abun_data.shape == (self.n_zones, self.network_size)
 		
-		# Produce a list of tuples containing both protons and neutrons
-		self.protons_neutrons = zip(self.protons, self.neutrons)
-		
-		# Produce another list containing the atomic mass numbers A
-		self.atomic_masses = [sum(pair) for pair in self.protons_neutrons]
+		# Produce an array containing the atomic mass numbers A
+		self.atomic_masses = self.protons + self.neutrons
 	
 	# Simple access methods
 	
@@ -70,13 +74,13 @@ class Abundances:
 		return self.n_zones
 	
 	def get_protons(self):
-		return list(self.protons)
+		return np.copy(self.protons)
 	
 	def get_neutrons(self):
-		return list(self.neutrons)
+		return np.copy(self.neutrons)
 	
 	def get_isotopes(self):
-		return list(self.isotopes)
+		return np.copy(self.isotopes)
 	
 	def get_radii(self):
 		return np.copy(self.radii)
@@ -84,27 +88,36 @@ class Abundances:
 	def get_abun_data(self):
 		return np.copy(self.abun_data)
 	
-	def get_protons_neutrons(self):
-		return list(self.protons_neutrons)
-	
 	def get_atomic_masses(self):
-		return list(self.atomic_masses)
+		return np.copy(self.atomic_masses)
 	
 	# More complicated access methods
 	
 	def find_isotope_index(self, iso_or_Z, N=None):
 		"""Find the index of a given isotope in the network list. With one
 		argument, it expects a string that is the name of an isotope. With two
-		arguments, it expects proton number, then neutron number as ints."""
+		arguments, it expects proton number, then neutron number as ints.
+		"""
 		
 		if N is None:
-			return self.isotopes.index(iso_or_Z)
+			index_array = np.nonzero(self.isotopes == iso_or_Z)
 		else:
-			return self.protons_neutrons.index((iso_or_Z, N))
+			protons_match = (self.protons == iso_or_Z)
+			neutrons_match = (self.neutrons == N)
+			index_array = np.nonzero(protons_match & neutrons_match)
+		
+		# The constructor method checks that all the isotopes are unique
+		# This should only be triggered if the isotope does not exist
+		if index_array.size != 1:
+			raise IndexError("failed to find isotope index: (%s, %s)" \
+				% (repr(iso_or_Z), repr(N)))
+		
+		return index_array[0]
 	
 	def find_abun_column(self, iso_or_Z, N=None):
 		"""Return a copy of the abundance column with the abundance of a given
-		isotope across all zones."""
+		isotope across all zones.
+		"""
 		
 		index = self.find_isotope_index(iso_or_Z, N)
 		return np.copy(self.abun_data[:,index])
@@ -112,11 +125,16 @@ class Abundances:
 	def construct_zone_abun(self, zone, tuple_format):
 		"""Return a list of all the abundance data for a given zone. The
 		tuple_format parameter specifies the desired format of each list
-		entry. For example, the tuple ('iso', 'Z', 'N', 'A', 'X', 'Y')."""
+		entry. For example, the tuple ('iso', 'Z', 'N', 'A', 'X', 'Y').
+		"""
 		
+		# Build up a list of all the columns requested by the format tuple
+		# These are all just *references* to the appropriate arrays of data
+		# This ought to run fast since we aren't actually copying anything yet
+		# One exception: the values for Y aren't stored anywhere in this class
+		# If Y is requested, we'll have to calculate those values on the fly
 		columns = list()
 		for item in tuple_format:
-			
 			if item == "iso":
 				columns.append(self.isotopes)
 			elif item == "Z":
@@ -128,16 +146,20 @@ class Abundances:
 			elif item == "X":
 				columns.append(self.abun_data[zone,:])
 			elif item == "Y":
-				columns.append(self.abun_data[zone,:] / self.atomic_masses)
+				# Note [section 3.3.3 of PRISM manual]: X(Z,A) := Y(Z,A) * A
+				columns.append(self.abun_data[zone,:] \
+					/ np.array(self.atomic_masses, "float32"))
 			else:
 				raise ValueError("tuple_format contains unknown item: %s" \
 					% (repr(item)))
-			
+		
+		# Once the references have been organized, zip them all together
 		return zip(*columns)
 
 class ZoneToPartId:
 	"""Class to handle reading of the zonetopartid.dat file format and provide
-	access methods for the data."""
+	access methods for the data.
+	"""
 	
 	def __init__(self, file_name):
 		
@@ -145,39 +167,29 @@ class ZoneToPartId:
 		self.file_name = file_name
 		if not os.path.exists(self.file_name):
 			raise ValueError("ztpi file does not exist: %s" \
-				% (self.file_name))
+				% (repr(self.file_name)))
 		
-		# This is a simple file that just contains two coluns of ints
-		self.particle_ids, self.zones = list(), list()
-		with open(self.file_name, "r") as ztpi:
-			for line in ztpi:
-				stripped = line.strip()
-				if stripped != "":
-					pair = [int(string) for string in stripped.split()]
-					assert len(pair) == 2
-					particle_id, zone = tuple(pair)
-					self.particle_ids.append(particle_id)
-					self.zones.append(zone)
+		# This is a simple file containing two columns of integers
+		self.particle_ids, self.zones = np.loadtxt(self.file_name, "int32",
+			unpack=True)
 		
-		# Store the length of the file
-		self.length = len(self.particle_ids)
+		# Store the total length of the file
+		self.length = self.particle_ids.size
 		
-		# As a sanity check, ensure there are no repeated particle ids
-		assert len(set(self.particle_ids)) == self.length
-		
-		# Also check that all the zone indices are non-negative
-		assert min(self.zones) >= 0
-		
-		# And the particle ids should all be unsigned ints
-		assert min(self.particle_ids) >= 0
+		# Run a few sanity checks on the file contents
+		# The first checks that the particle ids are unique
+		# The other two ensure that there are no negative values
+		assert np.unique(self.particle_ids).size == self.length
+		assert np.all(self.zones >= 0)
+		assert np.all(self.particle_ids >= 0)
 	
 	# Simple access methods
 	
 	def get_particle_ids(self):
-		return list(self.particle_ids)
+		return np.copy(self.particle_ids)
 	
 	def get_zones(self):
-		return list(self.zones)
+		return np.copy(self.zones)
 	
 	def get_length(self):
 		return self.length
@@ -187,7 +199,15 @@ class ZoneToPartId:
 	def find_particle_id_index(self, particle_id):
 		"""Find the index of a given particle id in the particle ids list."""
 		
-		return self.particle_ids.index(particle_id)
+		index_array = np.nonzero(self.particle_ids == particle_id)
+		
+		# The constructor method checks that all the particle ids are unique
+		# This should only be triggered if the particle id does not exist
+		if index_array.size != 1:
+			raise IndexError("failed to find particle id: %s" \
+				% (repr(particle_id)))
+		
+		return index_array[0]
 	
 	def find_zone(self, particle_id):
 		"""Return the zone associated with a particular particle id."""
@@ -196,20 +216,17 @@ class ZoneToPartId:
 		return self.zones[index]
 	
 	def find_particle_ids(self, zone):
-		"""Return a list of all the particle ids associated with a particular
-		zone."""
+		"""Return an array containing all the particle ids associated with a
+		given zone.
+		"""
 		
-		zone_particle_ids = list()
-		for i in xrange(self.length):
-			if self.zones[i] == zone:
-				zone_particle_ids.append(self.particle_ids[i])
-		
-		return zone_particle_ids
+		return np.copy(self.particle_ids[self.zones == zone])
 
 class SdfToPrismTranslator:
 	"""Primary translator class to handle translating a directory of SNSPH SDF
 	data to create inputs for PRISM in order to facilitate the postprocessing
-	of yields."""
+	of yields.
+	"""
 	
 	def __init__(self, sdf_dir):
 		
@@ -217,19 +234,19 @@ class SdfToPrismTranslator:
 		self.sdf_dir = sdf_dir
 		if not os.path.exists(self.sdf_dir):
 			raise ValueError("sdf_dir path does not exist: %s" \
-				% (self.sdf_dir))
+				% (repr(self.sdf_dir)))
 		
 		# Make a sorted list of all SDF file names in the directory
 		# These are the files with extensions made up entirely of digits
-		self.sdf_name_list = list()
-		for file_name in glob.glob(os.path.join(self.sdf_dir, "*")):
+		self.sdf_file_names = list()
+		for file_name in glob.glob(os.path.join(self.sdf_dir, "*.*")):
 			dot_ext = os.path.splitext(file_name)[1]
 			if dot_ext == "":
 				continue
 			if dot_ext[0] == '.' and dot_ext[1:].isdigit():
-				self.sdf_name_list.append(file_name)
-		self.sdf_name_list.sort()
-		self.n_sdfs = len(self.sdf_name_list)
+				self.sdf_file_names.append(file_name)
+		self.sdf_file_names.sort()
+		self.n_sdfs = len(self.sdf_file_names)
 		
 		# Assume that the other necessary files have standard names
 		self.abun_file_name = os.path.join(self.sdf_dir, STD_ABUN_FILE_NAME)
@@ -237,22 +254,25 @@ class SdfToPrismTranslator:
 		
 		# Open all the SDF files simultaneously and keep them in a list
 		# I might need to re-think this strategy if it requires too much RAM
-		self.sdf_list = [sdfpy.SDFRead(sdf_name) for sdf_name in \
-			self.sdf_name_list]
-		self.sdf_list.sort(key=lambda x: x.parameters["tpos"])
+		self.sdf_files = [sdfpy.SDFRead(sdf_file_name) for sdf_file_name \
+			in self.sdf_file_names]
+		self.sdf_files.sort(key=lambda sdf: sdf.parameters["tpos"])
 		
-		# Construct a set object containing all particle ids from the SDFs
-		self.particle_id_set = set(reduce(np.union1d, [sdf["ident"] for sdf \
-			in self.sdf_list]))
-		self.n_particles = len(self.particle_id_set)
+		# Construct an array containing all unique particle ids from the SDFs
+		self.particle_ids = reduce(np.union1d, [sdf["ident"] for sdf \
+			in self.sdf_files])
+		self.n_particles = self.particle_ids.size
 		
 		# Read the other necesary files using the classes for them
 		self.abun = Abundances(self.abun_file_name)
 		self.ztpi = ZoneToPartId(self.ztpi_file_name)
 		
 		# Run every remaining sanity check I can think of
-		assert max(self.ztpi.get_zones()) <= self.abun.get_n_zones() - 1
-		assert self.particle_id_set.issubset(set(self.ztpi.particle_ids))
+		# The second test ensures that the files agree on the number of zones
+		# The third test ensures that they agree on the set of particle ids
+		assert np.all(self.ztpi.get_zones() <= self.abun.get_n_zones() - 1)
+		assert np.all(np.in1d(self.particle_ids, self.ztpi.particle_ids,
+			assume_unique=True))
 	
 	# Simple access methods
 	
@@ -267,25 +287,28 @@ class SdfToPrismTranslator:
 		particle_ids.sort()
 		return particle_ids
 	
+	# More complicated access methods
+	
+	def find_particle_id_indices(self, particle_id):
+		"""
+		"""
+		
+		raise NotImplementedError
+	
 	# Method for imposing a temperature cutoff on the particles
 	
-	def get_particle_ids_with_temp_cutoff(self, temp_cutoff):
-		"""Return a list of all particle ids whose trajectories reach or
-		exceed the given temperature cutoff value (in kelvin). For high enough
+	def impose_temperature_cutoff(self, temp_cutoff):
+		"""Return a boolean array the same size as the array of particle ids
+		indicating those particles whose trajectories reach or exceed the
+		given temperature cutoff value (in kelvin). For high enough
 		temperature cutoff values (e.g., 1e8 K), this method can be used to
 		filter out particles that never get hot enough for nucleosynthesis to
-		occur. Only the particle ids returned by this method actually need to
-		be postprocessed by PRISM."""
+		occur. Only the particle ids which are marked as True by this method
+		actually need to be postprocessed by PRISM.
+		"""
 		
-		# For each SDF, pull out every particle id that reaches the cutoff
-		hot_particle_ids_set = set()
-		for sdf in self.sdf_list:
-			is_hot = (sdf["temp"] >= temp_cutoff)
-			hot_particle_ids_set.update(sdf["ident"][is_hot])
-		
-		hot_particle_ids_list = list(hot_particle_ids_set)
-		hot_particle_ids_list.sort()
-		return hot_particle_ids_list
+		return reduce(np.logical_or, [(sdf["temp"] >= temp_cutoff) for sdf \
+			in sdf_files])
 	
 	# Translation methods for producing PRISM inputs
 	
@@ -293,7 +316,8 @@ class SdfToPrismTranslator:
 		"""Given a particle id and an ouput file name, write a PRISM "initial
 		composition" file detailing the initial composition of that particle
 		by matching the particle id with the correct zone abundances from the
-		1d progenitor model."""
+		1d progenitor model.
+		"""
 		
 		# First, match the particle id with the correct 1d zone index
 		zone_index = self.ztpi.find_zone(particle_id)
@@ -306,8 +330,8 @@ class SdfToPrismTranslator:
 		
 		# Convert the tuples to simple space-delimited strings and join them
 		composition_strings = list()
-		for Z, A, X in composition_tuples:
-			string = "%d %d %.6E" % (Z, A, X)
+		for Z_A_X in composition_tuples:
+			string = "%d %d %.6E" % Z_A_X
 			composition_strings.append(string)
 		output = "\n".join(composition_strings)
 		
@@ -322,7 +346,8 @@ class SdfToPrismTranslator:
 		particle by extracting the temperature and density of that particle
 		from each SDF along with that SDF's simulation time. PRISM trajectory
 		files are allowed to begin with a single HEADER line of arbitrary
-		length that will be ignored by PRISM."""
+		length that will be ignored by PRISM.
+		"""
 		
 		# Default HEADER if none is provided
 		if HEADER is None:
@@ -337,13 +362,9 @@ class SdfToPrismTranslator:
 		
 		# Pull the tpos value, particle temp, and particle rho from each SDF
 		sdf_trajectory_tuples = list()
-		particle_index = 0
-		for sdf in self.sdf_list:
+		particle_indices = self.find_particle_indices(particle_id)
+		for sdf, particle_index in zip(self.sdf_files, particle_indices):
 			tpos = sdf.parameters["tpos"]
-			if sdf["ident"][particle_index] != particle_id:
-				index_array = np.argwhere(sdf["ident"] == particle_id)
-				assert index_array.size == 1
-				particle_index = index_array[0]
 			temp = sdf["temp"][particle_index]
 			rho = sdf["rho"][particle_index]
 			sdf_trajectory_tuples.append((tpos, temp, rho))
@@ -360,8 +381,8 @@ class SdfToPrismTranslator:
 		
 		# Convert the tuples to simple space-delimited strings and join them
 		trajectory_strings = [HEADER]
-		for t, T9, RHO in trajectory_tuples:
-			string = "%.8E %.8E %.8E" % (t, T9, RHO)
+		for t_T9_RHO in trajectory_tuples:
+			string = "%.8E %.8E %.8E" % t_T9_RHO
 			trajectory_strings.append(string)
 		output = "\n".join(trajectory_strings)
 		
