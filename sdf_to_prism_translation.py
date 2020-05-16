@@ -1,7 +1,7 @@
 # Python code for translating SNSPH SDF data into input files for PRISM
 # A necessary step if we want to use PRISM for postprocessing SNSPH particles
 
-# Last modified 15 May 2020 by Greg Vance
+# Last modified 16 May 2020 by Greg Vance
 
 import os.path
 import glob
@@ -16,6 +16,128 @@ STD_ZTPI_FILE_NAME = "zonetopartid.dat"
 MSUN = 1.9889E+33 # g
 RSUN = 6.955E+10 # cm
 
+# Helpful array algorithms
+
+def test_if_sorted(array):
+	"""Return True if the given Numpy array is sorted in ascending order."""
+	
+	i = 0
+	while i < array.size - 1:
+		if array[i] > array[i + 1]:
+			return False
+		i += 1
+	return True
+
+def test_if_unique(array):
+	"""Return True if the given Numpy array contains only unique elements."""
+	
+	return np.unique(array).size == array.size
+
+def find_one_index(array, value, assume_sorted=False):
+	"""Return index such that array[index] == value. Elements of the array are
+	assumed to be unique and IndexError is raised if value cannot be found.
+	The finding process can be sped up using a binary search if the array is
+	already known to be sorted.
+	"""
+	
+	# When the array is sorted, we can use a binary search to find the value
+	if assume_sorted:
+		
+		low_index = 0
+		high_index = array.size - 1
+		while low_index <= high_index:
+			middle_index = low_index + (high_index - low_index) / 2
+			if value < array[middle_index]:
+				high_index = middle_index - 1
+			elif value == array[middle_index]:
+				return middle_index
+			else: # value > array[middle_index]:
+				low_index = middle_index + 1
+	
+	# Without the sorted assumption, default to a basic linear search
+	else:
+		
+		index = 0
+		while index < array.size:
+			if array[index] == value:
+				return index
+			index += 1
+	
+	# Raise an error in case of search failure
+	raise IndexError("array does not contain value: %s" % (repr(value)))
+
+def find_all_indices(array, value, assume_sorted=False):
+	"""Return an array of indices indicating every place where array == value.
+	Elements of array are not assumed to be unique and an empty array will be
+	returned if value is not found. The finding process can be sped up using a
+	modified binary search if the array is already known to be sorted.
+	"""
+	
+	# When the array is sorted, we can use a modified binary search algorithm
+	# There may be multiple copies of value, but they'll be in one big clump
+	if assume_sorted:
+		
+		n = array.size
+		low_index1 = 0
+		high_index1 = n - 1
+		low_index2 = 0
+		high_index2 = n - 1
+		index1 = None
+		index2 = None
+		
+		# Search for index1, the first index in the clump
+		while low_index1 <= high_index1:
+			middle_index1 = low_index1 + (high_index1 - low_index1) / 2
+			if value < array[middle_index1]:
+				high_index1 = middle_index1 - 1
+				high_index2 = middle_index1 - 1
+			elif value == array[middle_index1]:
+				low_index2 = middle_index1
+				if middle_index1 == 0 or array[middle_index1 - 1] < value:
+					index1 = middle_index1
+					break
+				else:
+					high_index1 = middle_index1 - 1
+			else: # value > array[middle_index1]
+				low_index1 = middle_index1 + 1
+				low_index2 = middle_index1 + 1
+		
+		# If we couldn't find a start for the clump, then there is no clump
+		if index1 is None:
+			return np.array([], 'int')
+		
+		# Search for index 2, the last index in the clump
+		while low_index2 <= high_index2:
+			middle_index2 = low_index2 + (high_index2 - low_index2) / 2
+			if value < array[middle_index2]:
+				high_index2 = middle_index2 - 1
+			elif value == array[middle_index2]:
+				if middle_index2 == n - 1 or array[middle_index2 + 1] > value:
+					index2 = middle_index2
+					break
+				else:
+					low_index2 = middle_index2 + 1
+			else: # value > array[middle_index2]
+				low_index2 = middle_index2 + 1
+		
+		# This should never happen if we already found a start of the clump
+		# It probably indicates that the array wasn't actually sorted
+		# Either that, or something is wrong with our search algorithm
+		if index2 is None:
+			raise IndexError("unexplained failure in find_all_indices")
+		
+		# Use the clump's limits to produce the output array
+		return np.arange(index1, index2 + 1, dtype='int')
+	
+	# If unsorted, then just use Numpy to brute-force check every element
+	else:
+		
+		# The nonzero function returns a single-element tuple here,
+		# so index into it to produce the 1d array that I'm expecting
+		return np.nonzero(array == value)[0]
+
+# File translation classes
+
 class Abundances:
 	"""Class to handle reading of the abun.dat file format and provide access
 	methods for the data.
@@ -29,8 +151,8 @@ class Abundances:
 			raise ValueError("abun file does not exist: %s" \
 				% (repr(self.file_name)))
 		
-		# The first five lines are the header info, so start with those
-		# Convert all of this data to Numpy arrays where possible
+		# The first five lines are the header info, so start by reading those
+		# Convert the header data to Numpy arrays where sequences are expected
 		with open(self.file_name, "r") as abun_file:
 			header = [abun_file.readline().strip() for h in xrange(5)]
 		self.network_size = int(header[0])
@@ -53,12 +175,14 @@ class Abundances:
 		
 		# Before proclaiming success, go ahead and sanity-check *everything*
 		# The first two and last two tests check the file for self-consistency
-		# The middle two tests ensure that the array of isotopes is unique
+		# Tests 3 and 4 ensure that the proton and neutron numbers make sense
+		# Tests 5 and 6 ensure that the list of isotopes has no repeats
 		assert self.protons.size == self.network_size
 		assert self.neutrons.size == self.network_size
-		assert np.unique(np.column_stack([self.protons, self.neutrons]), \
-			axis=0).shape == (self.network_size, 2)
-		assert np.unique(self.isotopes).size == self.network_size
+		assert np.all(self.protons >= 0) and np.all(self.protons < 1000)
+		assert np.all(self.neutrons >= 0) and np.all(self.neutrons < 1000)
+		assert test_if_unique(self.protons * 1000 + self.neutrons)
+		assert test_if_unique(self.isotopes)
 		assert self.radii.shape == (self.n_zones,)
 		assert self.abun_data.shape == (self.n_zones, self.network_size)
 		
@@ -99,22 +223,15 @@ class Abundances:
 		arguments, it expects proton number, then neutron number as ints.
 		"""
 		
+		# I don't trust myself to sort these, so just use a linear search
 		if N is None:
-			index_array = np.nonzero(self.isotopes == iso_or_Z)
+			return find_one_index(self.isotopes, iso_or_Z)
 		else:
-			protons_match = (self.protons == iso_or_Z)
-			neutrons_match = (self.neutrons == N)
-			index_array = np.nonzero(protons_match & neutrons_match)
+			proton_match = find_all_indices(self.protons, iso_or_Z)
+			neutron_match = find_one_index(self.neutrons[proton_match], N)
+			return proton_match[neutron_match]
 		
-		# The constructor method checks that all the isotopes are unique
-		# This should only be triggered if the isotope does not exist
-		if index_array.size != 1:
-			raise IndexError("failed to find isotope index: (%s, %s)" \
-				% (repr(iso_or_Z), repr(N)))
-		
-		return index_array[0]
-	
-	def find_abun_column(self, iso_or_Z, N=None):
+	def extract_abun_column(self, iso_or_Z, N=None):
 		"""Return a copy of the abundance column with the abundance of a given
 		isotope across all zones.
 		"""
@@ -179,9 +296,14 @@ class ZoneToPartId:
 		# Run a few sanity checks on the file contents
 		# The first checks that the particle ids are unique
 		# The other two ensure that there are no negative values
-		assert np.unique(self.particle_ids).size == self.length
+		assert test_if_unique(self.particle_ids)
 		assert np.all(self.zones >= 0)
 		assert np.all(self.particle_ids >= 0)
+		
+		# For fast searching, make sure the arrays are sorted by particle id
+		sort_order = np.argsort(self.particle_ids)
+		self.particle_ids = np.copy(self.particle_ids[sort_order])
+		self.zones = np.copy(self.zones[sort_order])
 	
 	# Simple access methods
 	
@@ -199,15 +321,8 @@ class ZoneToPartId:
 	def find_particle_id_index(self, particle_id):
 		"""Find the index of a given particle id in the particle ids list."""
 		
-		index_array = np.nonzero(self.particle_ids == particle_id)
-		
-		# The constructor method checks that all the particle ids are unique
-		# This should only be triggered if the particle id does not exist
-		if index_array.size != 1:
-			raise IndexError("failed to find particle id: %s" \
-				% (repr(particle_id)))
-		
-		return index_array[0]
+		return find_one_index(self.particle_ids, particle_id,
+			assume_sorted=True)
 	
 	def find_zone(self, particle_id):
 		"""Return the zone associated with a particular particle id."""
@@ -220,7 +335,8 @@ class ZoneToPartId:
 		given zone.
 		"""
 		
-		return np.copy(self.particle_ids[self.zones == zone])
+		indices = find_all_indices(self.zones, zone)
+		return np.copy(self.particle_ids[indices])
 
 class SdfToPrismTranslator:
 	"""Primary translator class to handle translating a directory of SNSPH SDF
@@ -263,13 +379,25 @@ class SdfToPrismTranslator:
 			in self.sdf_files])
 		self.n_particles = self.particle_ids.size
 		
+		# Sanity-check some of the contents of the SDFs
+		# First, make sure there are no repeated particle ids
+		# Then, ensure self-consistency with the number of particles
+		for sdf in self.sdf_files:
+			assert test_if_unique(sdf["ident"])
+			assert sdf.parameters["npart"] == sdf["ident"].size
+			assert sdf.parameters["npart"] <= self.n_particles
+		
+		# To hopefully decrease search times, check if each SDF is sorted
+		self.sdf_is_sorted = np.array([test_if_sorted(sdf["ident"]) for sdf \
+			in self.sdf_files], "bool")
+		
 		# Read the other necesary files using the classes for them
 		self.abun = Abundances(self.abun_file_name)
 		self.ztpi = ZoneToPartId(self.ztpi_file_name)
 		
 		# Run every remaining sanity check I can think of
-		# The second test ensures that the files agree on the number of zones
-		# The third test ensures that they agree on the set of particle ids
+		# The first test ensures that the files agree on the number of zones
+		# The second test ensures that they agree on the set of particle ids
 		assert np.all(self.ztpi.get_zones() <= self.abun.get_n_zones() - 1)
 		assert np.all(np.in1d(self.particle_ids, self.ztpi.particle_ids,
 			assume_unique=True))
@@ -283,17 +411,40 @@ class SdfToPrismTranslator:
 		return self.n_particles
 	
 	def get_particle_ids(self):
-		particle_ids = list(self.particle_id_set)
-		particle_ids.sort()
-		return particle_ids
+		return np.copy(self.particle_ids)
 	
 	# More complicated access methods
 	
 	def find_particle_id_indices(self, particle_id):
-		"""
+		"""Return an array containing the index of a given particle id in all
+		SDFs ordered by the SDF tpos values.
 		"""
 		
-		raise NotImplementedError
+		indices = np.full(self.n_sdfs, -1, dtype="int")
+		n_fails = 0
+		
+		for i, sdf in enumerate(self.sdf_files):
+			
+			# If the index from the previous SDF works, then use that
+			if i > 0 and sdf["ident"][indices[i - 1]] == particle_id:
+				indices[i] = indices[i - 1]
+			
+			# Otherwise, we'll have to search for the particle id
+			else:
+				try:
+					indices[i] = find_one_index(sdf["ident"], particle_id,
+						assume_sorted=self.sdf_is_sorted[i])
+				except IndexError:
+					n_fails += 1
+		
+		if n_fails > 0:
+			if n_fails == self.n_sdfs:
+				raise IndexError("unable to find particle id: %s" \
+					% (repr(particle_id)))
+			print "Warning: SDF data for particle id %d is incomplete" \
+				% (particle_id)
+		
+		return indices
 	
 	# Method for imposing a temperature cutoff on the particles
 	
@@ -308,7 +459,7 @@ class SdfToPrismTranslator:
 		"""
 		
 		return reduce(np.logical_or, [(sdf["temp"] >= temp_cutoff) for sdf \
-			in sdf_files])
+			in self.sdf_files])
 	
 	# Translation methods for producing PRISM inputs
 	
@@ -362,8 +513,10 @@ class SdfToPrismTranslator:
 		
 		# Pull the tpos value, particle temp, and particle rho from each SDF
 		sdf_trajectory_tuples = list()
-		particle_indices = self.find_particle_indices(particle_id)
+		particle_indices = self.find_particle_id_indices(particle_id)
 		for sdf, particle_index in zip(self.sdf_files, particle_indices):
+			if particle_index == -1:
+				continue
 			tpos = sdf.parameters["tpos"]
 			temp = sdf["temp"][particle_index]
 			rho = sdf["rho"][particle_index]
@@ -389,4 +542,44 @@ class SdfToPrismTranslator:
 		# Write the final string of data to the output file
 		with open(output_file_name, "w") as output_file:
 			output_file.write(output)
+
+# If this file is being executed instead of imported, run a few tests
+if __name__ == "__main__":
+	
+	TEST_DIR = "/home/gsvance/vconv_3d_asym_data/vconv_snsph_data/"
+	t = SdfToPrismTranslator(TEST_DIR)
+	
+	t.abun.get_network_size()
+	t.abun.get_n_zones()
+	t.abun.get_protons()
+	t.abun.get_neutrons()
+	t.abun.get_isotopes()
+	t.abun.get_radii()
+	t.abun.get_abun_data()
+	t.abun.get_atomic_masses()
+	
+	t.abun.find_isotope_index('fe61')
+	t.abun.find_isotope_index(26, 61 - 26)
+	t.abun.extract_abun_column('fe61')
+	t.abun.extract_abun_column(26, 61 - 26)
+	t.abun.construct_zone_abun(1234, ('X', 'Y', 'Z', 'A', 'iso', 'N'))
+	
+	t.ztpi.get_particle_ids()
+	t.ztpi.get_zones()
+	t.ztpi.get_length()
+	
+	t.ztpi.find_particle_id_index(2468)
+	t.ztpi.find_zone(2468)
+	t.ztpi.find_particle_ids(1234)
+	
+	t.get_n_sdfs()
+	t.get_n_particles()
+	t.get_particle_ids()
+	
+	t.find_particle_id_indices(13579)
+	t.impose_temperature_cutoff(1E+8)
+	t.write_initial_composition_file(5500, "test/test_icomp.txt")
+	t.write_trajectory_file(5500, "test/test_traj.txt")
+	
+	print "All tests ran without raising exceptions"
 
