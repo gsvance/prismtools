@@ -1,10 +1,14 @@
 #!/usr/bin/env python
-# 
+# Python wrapper program for parallelization of PRISM (part 2 of 3)
+# Goal 1: produce post-processed yields for every particle from an SNSPH run
+# Goal 2: avoid having to submit 950k sbatch jobs--that way lies madness
+# Goal 3: organize all the output from PRISM after the processing is done
+# This script is tasked with running all of the PRISM jobs assigned to it
 
 # Last modified 16 May 2020 by Greg Vance
 
 import sys
-import os.path
+import os
 import time
 
 import json
@@ -39,11 +43,11 @@ def main():
 	parameters = read_input_parameters()
 	
 	# Extract the input parameters into shorter variable names
-	sdf_dir = parameters["sdf dir"]
-	output_dir = parameters["output dir"]
-	team_size = parameters["team size"]
-	team_rank = parameters["team rank"]
-	temp_cut = parameters["temp cut"]
+	sdf_dir = os.path.abspath(parameters["sdf dir"])
+	output_dir = os.path.abspath(parameters["output dir"])
+	team_size = int(parameters["team size"])
+	team_rank = int(parameters["team rank"])
+	temp_cut = float(parameters["temp cut"])
 	del parameters
 	
 	# Print our team status as we understand it
@@ -76,6 +80,9 @@ def main():
 	################################
 	##### SETUP CODE ENDS HERE #####
 	################################
+	
+	# Switch over to PRISM's install directory before we try running it
+	os.chdir(PRISM_DIR)
 	
 	# Loop over all the particles that were assigned to this teammate
 	# THE RULE: We are responsible for every index in the particle id array
@@ -178,7 +185,7 @@ def prepare_prism_files(particle_id, translator, output_dir):
 		% (TRAJECTORY_PREFIX, particle_id))
 	translator.write_trajectory_file(particle_id, trajectory_file_name)
 	
-	# Create the PRISM control file for processing this particle
+	# Create the PRISM control file for handling this particle
 	control_file_name = os.path.join(output_dir, "%s_%08d.json" \
 		% (CONTROL_PREFIX, particle_id))
 	fcomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
@@ -186,7 +193,7 @@ def prepare_prism_files(particle_id, translator, output_dir):
 	write_control_file(control_file_name, icomposition_file_name,
 		trajectory_file_name, fcomposition_file_name)
 	
-	# Set file names to collect PRISM's stdout and stderr
+	# Set two file names to collect PRISM's stdout and stderr
 	prism_stdout_file_name = os.path.join(output_dir, "%s_%08d.out" \
 		% (PRISM_STDOUT_PREFIX, particle_id))
 	prism_stderr_file_name = os.path.join(output_dir, "%s_%08d.err" \
@@ -206,7 +213,9 @@ def write_control_file(control_file_name, icomposition_file_name,
 	"""Write the JSON control file for a single particle using the requested
 	file names and PRISM stop temperature (in kelvin). This mostly involves
 	reading the deafult control file, making a few modifications, and then
-	writing the modified data to a new JSON file."""
+	writing the modified data to a new JSON file. If no stop temperature is
+	provided the control file will tell PRISM to stop when it reaches the end
+	of the trajectory file instead."""
 	
 	# Read the JSON data from the default control file that came with PRISM
 	with open(DEFAULT_CONTROL, "r") as default_control_file:
@@ -251,61 +260,40 @@ def run_prism_once(particle_id, file_names):
 	# run prism with subprocess
 	# check that prism was happy
 	# clean up unneeded files
-
-def	prism_minion_main():
-
-	# Relocate to PRISM's install directory---it likes to run from there
-	# Not whether each process can have a different working directory...
-	os.chdir(PRISM_DIR)
 	
-	# Send your rank to the administrator to request your first assignment
-	comm.send(rank, dest=admin_rank, tag=REQUEST_TAG)
-	order = comm.recv(source=admin_rank, tag=ASSIGN_TAG)
 	
-	# Loop until the administrator sends the terminate signal
-	while order != TERMINATE_SIGNAL:
-		
-		# The order will be a dict of file names if not the terminate_signal
-		file_names = order
-		
-		# Open two file streams to catch the reporting from PRISM
-		stdout_file = open(file_names["prism stdout"], "w")
-		stderr_file = open(file_names["prism stderr"], "w")
-		
-		# Run a PRISM subprocess using the files provided to you
-		command = ["./prism", "-c", file_names["control"]]
-		prism_exit_code = subprocess.call(command, stdout=stdout_file,
-			stderr=stderr_file, shell=True)
-		
-		# Close the PRISM output files
-		stdout_file.close()
-		stderr_file.close()
-		
-		# Draw attention to any unhappy exit codes from PRISM
-		if prism_exit_code != 0:
-			print "ALERT (PROCESS %d): PRISM RETURNED BAD EXIT CODE %d" \
-				% (rank, prism_exit_code)
-			print "ALERT (PROCESS %d): OFFENDING PARTICLE ID: %08d" \
-				% (rank, file_names["particle id"])
-		
-		# Immediately delete any input files that are no longer needed
-		# This isn't just to keep the file system tidy---if we don't do this,
-		# we could wind up dealing with literally *millions* of leftover files
-		# If the exit code was unhappy, then we might want to keep the files
-		if prism_exit_code == 0 and DELETE_FILES:
-			os.remove(file_names["initial composition"])
-			os.remove(file_names["trajectory"])
-			os.remove(file_names["control"])
-			os.remove(file_names["prism stdout"])
-			os.remove(file_names["prism stderr"])
-		
-		# Done! Request another assignment from the administrator
-		comm.send(rank, dest=admin_rank, tag=REQUEST_TAG)
-		order = comm.recv(source=admin_rank, tag=ASSIGN_TAG)
 	
-	# Print a final sign-off message when termination occurs
-	print "  Process %d is terminating." % (rank)
+	# Open two file streams to catch the stdout and stderr from PRISM
+	stdout_file = open(file_names["prism stdout"], "w")
+	stderr_file = open(file_names["prism stderr"], "w")
+	
+	# Run a PRISM subprocess using the files prepared earlier
+	command = ["./prism", "-c", file_names["control"]]
+	prism_exit_code = subprocess.call(command, stdout=stdout_file,
+		stderr=stderr_file)
+	
+	# Close the file streams collecting stdout and stderr from PRISM
+	stdout_file.close()
+	stderr_file.close()
+	
+	# Draw attention to any unhappy exit codes from PRISM
+	if prism_exit_code != 0:
+		print "ALERT (PROCESS %d): PRISM RETURNED BAD EXIT CODE %d" \
+			% (rank, prism_exit_code)
+		print "ALERT (PROCESS %d): OFFENDING PARTICLE ID: %08d" \
+			% (rank, file_names["particle id"])
+	
+	# Immediately delete any input files that are no longer needed
+	# This isn't just to keep the file system tidy---if we don't do this,
+	# we could wind up dealing with literally *millions* of leftover files
+	# If the exit code was unhappy, then we might want to keep the files
+	if prism_exit_code == 0 and DELETE_FILES:
+		os.remove(file_names["initial composition"])
+		os.remove(file_names["trajectory"])
+		os.remove(file_names["control"])
+		os.remove(file_names["prism stdout"])
+		os.remove(file_names["prism stderr"])
 
-# This file is organized C-style: define a bunch of functions, then call main
+# This file is organized in the style of C: define functions, then call main
 main()
 

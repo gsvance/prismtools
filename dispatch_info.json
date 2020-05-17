@@ -1,0 +1,6 @@
+{
+  "sdf dir": "/home/gsvance/vconv_3d_asym_data/vconv_snsph_data/",
+  "output dir": "/home/gsvance/vconv_3d_asym_data/vconv_prism_postprocess/",
+  "team size": 100,
+  "temp cut": 1E+8
+}
