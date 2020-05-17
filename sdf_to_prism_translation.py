@@ -149,7 +149,7 @@ class Abundances:
 		self.file_name = file_name
 		if not os.path.exists(self.file_name):
 			raise ValueError("abun file does not exist: %s" \
-				% (repr(self.file_name)))
+				% (self.file_name))
 		
 		# The first five lines are the header info, so start by reading those
 		# Convert the header data to Numpy arrays where sequences are expected
@@ -284,7 +284,7 @@ class ZoneToPartId:
 		self.file_name = file_name
 		if not os.path.exists(self.file_name):
 			raise ValueError("ztpi file does not exist: %s" \
-				% (repr(self.file_name)))
+				% (self.file_name))
 		
 		# This is a simple file containing two columns of integers
 		self.particle_ids, self.zones = np.loadtxt(self.file_name, "int32",
@@ -350,7 +350,7 @@ class SdfToPrismTranslator:
 		self.sdf_dir = sdf_dir
 		if not os.path.exists(self.sdf_dir):
 			raise ValueError("sdf_dir path does not exist: %s" \
-				% (repr(self.sdf_dir)))
+				% (self.sdf_dir))
 		
 		# Make a sorted list of all SDF file names in the directory
 		# These are the files with extensions made up entirely of digits
