@@ -4,8 +4,9 @@
 # Goal 2: avoid having to submit 950k sbatch jobs--that way lies madness
 # Goal 3: organize all the output from PRISM after the processing is done
 # This script is tasked with running all of the PRISM jobs assigned to it
+# Run this script as a non-interactive cluster job!
 
-# Last modified 16 May 2020 by Greg Vance
+# Last modified 22 May 2020 by Greg Vance
 
 import sys
 import os
@@ -31,14 +32,15 @@ DEFAULT_CONTROL = os.path.join(PRISM_DIR, "input/control.json")
 
 # Flags to set for debug testing
 PARTICLES_LIMIT = 4  # stop after processing some number of particles
-DELETE_FILES = False  # whether to clean up the input files or not
+DELETE_FILES = False  # whether to clean up files as we go or not
 
 def main():
 	
 	# Start timer and print welcome messages
 	t1 = time.time()
 	print "<< PRISM Parallelization Teammate Script >>"
-	print "Beginning setup procedure...\n"
+	print "Beginning setup procedure..."
+	print
 	
 	parameters = read_input_parameters()
 	
@@ -50,18 +52,20 @@ def main():
 	temp_cut = float(parameters["temp cut"])
 	del parameters
 	
-	# Print our team status as we understand it
-	print "This job is assigned to run team rank %d of team size %d\n." \
+	# Print our team teammate status as we understand it
+	print "This job is assigned to run team rank %d of team size %d." \
 		% (team_rank, team_size)
+	print
 	
-	# Set up the data translator object... this can take a while
-	print "Initializing SDF-to_PRISM data translator object..."
+	# Set up the data translator object... this can take a while to do
+	# Only need to do this once, so it should be a small part of the runtime
+	print "Initializing SDF-to-PRISM data translator object..."
 	translator = s2p.SdfToPrismTranslator(sdf_dir)
 	print "Translator object is constructed and ready to proceed."
 	
-	# Read the array of particle ids from the translator
+	# Get the full array of particle ids from the translator
 	particle_ids = translator.get_particle_ids()
-	print "SDF directory contains data for %d particles." (particle_ids.size)
+	print "SDF directory has data for %d particles." % (particle_ids.size)
 	
 	# Impose a temperature cutoff to limit the number of necessary PRISM runs
 	print "Imposing temperature cutoff at %.3E kelvin..." % (temp_cut)
@@ -81,53 +85,78 @@ def main():
 	##### SETUP CODE ENDS HERE #####
 	################################
 	
-	# Switch over to PRISM's install directory before we try running it
+	# Switch over to PRISM's local install directory before we try running it
+	# There's a lot of deafault files that it looks for in the subdirectories
+	# We *could* run it elsewhere, but it's a lot easier to run it from here
 	os.chdir(PRISM_DIR)
 	
+	# Establish the name of this teammate's big data output file
+	# We will consolidate all final composition data here as we go along
+	# Open the file in write mode for a moment to clear its contents
+	data_file_name = os.path.join(output_dir, "teammate_%04d.dat" \
+		% (team_rank))
+	open(data_file_name, "w").close()
+	print "Consolidation data file name: %s" % (data_file_name)
+	
 	# Loop over all the particles that were assigned to this teammate
-	# THE RULE: We are responsible for every index in the particle id array
-	# that is congruent to our team_rank (modulo team_size).
+	# THE RULE HERE: We are responsible for every index in the particle id
+	# array that is congruent to our team_rank (modulo team_size).
 	# Example: team_rank = 6, team_size = 10
-	# We are responsible for the particles at indices 6, 16, 26, 36, 46, ...
-	print "Starting main loop over assigned particle ids...\n"
+	# We would take the particles at indices 6, 16, 26, 36, 46, ...
+	print "Starting main loop over assigned particle ids..."
+	print
+	n_loops = 0
 	for particle_index in xrange(team_rank, particle_ids.size, team_size):
 		
+		# If a debug limit was set on the number of particles, then check that
+		if PARTICLES_LIMIT is not None and n_loops >= PARTICLES_LIMIT:
+			print "Main loop reached PARTICLES_LIMIT debug value."
+			print "Breaking out of main loop now."
+			print
+			break
+		
 		particle_id = particle_ids[particle_index]
-		print "Now considering particle id %08d at index %d." \
+		print "Now considering particle id %08d at index %d in array." \
 			% (particle_id, particle_index)
 		
 		# If this particle needs post-processing, then go ahead and run PRISM
 		if particle_is_hot[particle_index]:
 			print "This particle will require processing by PRISM."
 			print "Preparing files needed by PRISM..."
-			file_names = prepare_prism_files(particle_id, translator, \
+			file_names = prepare_prism_files(particle_id, translator,
 				output_dir)
-			print "Files ready. Starting up PRISM subprocess..."
+			print "Files are ready. Starting up PRISM subprocess..."
 			run_prism_once(particle_id, file_names)
-			print "PRISM has finished running."
+			print "PRISM subprocess has finished running."
+			fcomposition_file_name = file_names["final composition"]
 		
 		# If the particle does NOT need post-processing, then don't run PRISM
 		else:
 			print "This particle will NOT require any processing by PRISM."
 			print "Copying initial composition directly to output file..."
-			write_fake_output_file()
+			fcomposition_file_name = write_fake_output_file(particle_id,
+				translator, output_dir)
 		
-		# consolidate the latest output file into a big output file
-		consolidate()
+		# Consolidate the latest output data into our big output data file
+		print "Consolidating final composition data into big file..."
+		consolidate(particle_id, fcomposition_file_name, data_file_name)
+		print "Consolidation completed."
 		
+		n_loops += 1
 		print
 	
 	# The loop is done, so just finish up
-	print "Main loop is complete."
+	print "Main loop is now complete."
+	print "A total of %d particles were considered in the loop." % (n_loops)
 	t3 = time.time()
 	t_loop = t3 - t2
 	t_total = t3 - t1
 	print "The main loop took %.3f minutes to run." % (t_loop / 60.)
-	print "The entire program with setup took %.3f mniutes to run." \
+	print "The entire program with setup took %.3f minutes to run." \
 		% (t_total / 60.)
 	print
 	
-	print "Execution is now complete. Bye!"
+	print "Script execution is now complete. Bye!"
 
 def read_input_parameters():
 	"""Parse the script's command line argument, read the input parameters
@@ -136,7 +165,7 @@ def read_input_parameters():
 	"""
 	
 	# Check the number of command line arguments that were received
-	# We're only expecting the name of a small input JSON file
+	# We are only expecting the name of a small JSON file with inputs
 	if len(sys.argv) != 2:
 		raise TypeError("one command line argument is required: " \
 			+ "name of JSON input file")
@@ -151,7 +180,7 @@ def read_input_parameters():
 	print json.dumps(parameters, indent=2, separators=(",", ": "))
 	print
 	
-	# Sanity-check a few of the input values before starting
+	# Sanity-check a few of the input values before returning to main
 	# Existence of SDF directory will be checked by the translator object
 	if not os.path.exists(parameters["output dir"]):
 		raise ValueError("output directory does not exist: %s" \
@@ -172,7 +201,12 @@ def prepare_prism_files(particle_id, translator, output_dir):
 	  - ASCII initial composition file
 	  - ASCII trajectory file
 	  - JSON control file
-	Details about their formats can be found in the PRISM manual PDF."""
+	Details about their formats can be found in the PRISM manual PDF. In
+	addition to the particle id, this function will need access to the data
+	translator and the path to the output directory where all the files should
+	be saved. New files will be written to the output directory and PRISM will
+	be instructed to save its output to the same output directory.
+	"""
 	
 	# Create this particle's initial composition ASCII file for PRISM
 	icomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
@@ -185,7 +219,7 @@ def prepare_prism_files(particle_id, translator, output_dir):
 		% (TRAJECTORY_PREFIX, particle_id))
 	translator.write_trajectory_file(particle_id, trajectory_file_name)
 	
-	# Create the PRISM control file for handling this particle
+	# Create the PRISM JSON control file for handling this particle
 	control_file_name = os.path.join(output_dir, "%s_%08d.json" \
 		% (CONTROL_PREFIX, particle_id))
 	fcomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
@@ -204,6 +238,7 @@ def prepare_prism_files(particle_id, translator, output_dir):
 	file_names["initial composition"] = icomposition_file_name
 	file_names["trajectory"] = trajectory_file_name
 	file_names["control"] = control_file_name
+	file_names["final composition"] = fcomposition_file_name
 	file_names["prism stdout"] = prism_stdout_file_name
 	file_names["prism stderr"] = prism_stderr_file_name
 	return file_names
@@ -215,14 +250,15 @@ def write_control_file(control_file_name, icomposition_file_name,
 	reading the deafult control file, making a few modifications, and then
 	writing the modified data to a new JSON file. If no stop temperature is
 	provided the control file will tell PRISM to stop when it reaches the end
-	of the trajectory file instead."""
+	of the trajectory file instead.
+	"""
 	
 	# Read the JSON data from the default control file that came with PRISM
 	with open(DEFAULT_CONTROL, "r") as default_control_file:
 		control = json.load(default_control_file)
 	
-	# For now, use the standard nuclear data files
-	#control["nuclear"]["datasets"] = :DEFAULT:
+	# For now, use the standard nuclear data files that came with PRISM
+	#control["nuclear"]["datasets"] = [DEFAULT]
 	
 	# Change the conditions object to direct PRISM to the correct input files
 	control["conditions"]["initial_composition"]["path"] \
@@ -239,7 +275,7 @@ def write_control_file(control_file_name, icomposition_file_name,
 	else:
 		control["network"]["stop"] = {"comment":
 			"Left blank to stop calculation at end of trajectory file"}
-	#control["network"]["extent"] = :DEFAULT:
+	#control["network"]["extent"] = [DEFAULT]
 	
 	# Use the output object to strongly limit PRISM's set of output files
 	for output_key in control["output"].keys():
@@ -253,21 +289,19 @@ def write_control_file(control_file_name, icomposition_file_name,
 		json.dump(control, new_control_file, indent=2, separators=(",", ": "))
 
 def run_prism_once(particle_id, file_names):
+	"""Given a particle id and the dict of related file names, start a
+	subprocess and run PRISM once. If all goes well, clean up any unneeded
+	files to avoid overwhelming the file system. If the exit code from PRISM
+	indicates a problem, print an alert and don't delete the files--they could
+	be important for manual debugging later.
 	"""
-	"""
-	
-	# assemble a prism command
-	# run prism with subprocess
-	# check that prism was happy
-	# clean up unneeded files
-	
-	
 	
 	# Open two file streams to catch the stdout and stderr from PRISM
 	stdout_file = open(file_names["prism stdout"], "w")
 	stderr_file = open(file_names["prism stderr"], "w")
 	
-	# Run a PRISM subprocess using the files prepared earlier
+	# Run a PRISM subprocess using files that were prepared earlier
+	# Remember that Python has already chdir'ed to PRISM's install directory
 	command = ["./prism", "-c", file_names["control"]]
 	prism_exit_code = subprocess.call(command, stdout=stdout_file,
 		stderr=stderr_file)
@@ -278,14 +312,12 @@ def run_prism_once(particle_id, file_names):
 	
 	# Draw attention to any unhappy exit codes from PRISM
 	if prism_exit_code != 0:
-		print "ALERT (PROCESS %d): PRISM RETURNED BAD EXIT CODE %d" \
-			% (rank, prism_exit_code)
-		print "ALERT (PROCESS %d): OFFENDING PARTICLE ID: %08d" \
-			% (rank, file_names["particle id"])
+		print "ALERT: PRISM RETURNED BAD EXIT CODE %d" % (prism_exit_code)
+		print "ALERT: THE OFFENDING PARTICLE ID IS %08d" % (particle_id)
 	
-	# Immediately delete any input files that are no longer needed
+	# Immediately delete any files that are no longer needed
 	# This isn't just to keep the file system tidy---if we don't do this,
-	# we could wind up dealing with literally *millions* of leftover files
+	# we could wind up dealing with literally *millions* of leftovers
 	# If the exit code was unhappy, then we might want to keep the files
 	if prism_exit_code == 0 and DELETE_FILES:
 		os.remove(file_names["initial composition"])
@@ -294,6 +326,45 @@ def run_prism_once(particle_id, file_names):
 		os.remove(file_names["prism stdout"])
 		os.remove(file_names["prism stderr"])
 
-# This file is organized in the style of C: define functions, then call main
+def write_fake_output_file(particle_id, translator, output_dir):
+	"""To avoid running PRISM on cold particles, copy the initial composition
+	of the particle straight to a fake PRISM output file. Return the name of
+	the new composition file that we created.
+	"""
+	
+	# The PRISM input and output files both have the same format
+	# Several ASCII lines, each listing (Z, A, X) for one species
+	fcomposition_file_name = os.path.join(output_dir, "%s_%08d.dat" \
+		% (FCOMPOSITION_PREFIX, particle_id))
+	translator.write_initial_composition_file(particle_id, \
+		fcomposition_file_name)
+	
+	return fcomposition_file_name
+
+def consolidate(particle_id, fcomposition_file_name, data_file_name):
+	"""Consolidate the latest final composition file from PRISM into a big
+	data file that consolidates everything we've done so far. Open the data
+	file in append mode, then append the particle id and all the data from the
+	final composition file.
+	"""
+	
+	# Open final composition file for reading and data file for appending
+	fcomposition_file = open(fcomposition_file_name, "r")
+	data_file = open(data_file_name, "a")
+	
+	# Write the particle id to the data file, then write the composition lines
+	data_file.write("%s\n" % (particle_id))
+	for line in fcomposition_file:
+		stripped = line.strip()
+		if stripped != "":
+			data_file.write(" ".join(stripped.split()) + "\n")
+	
+	# Close the files and delete the unneeded final composition file
+	fcomposition_file.close()
+	data_file.close()
+	if DELETE_FILES:
+		os.remove(fcomposition_file_name)
+
+# This file is organized in the style of C--define functions, then call main
 main()
 
