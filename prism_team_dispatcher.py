@@ -4,8 +4,9 @@
 # Goal 2: avoid having to submit 950k sbatch jobs--that way lies madness
 # Goal 3: organize all the output from PRISM after the processing is done
 # This script is the setup program for submitting a team of teammate jobs
+# Run this script interactively!
 
-# Last modified 21 May 2020 by Greg Vance
+# Last modified 22 May 2020 by Greg Vance
 
 import sys
 import os.path
@@ -13,8 +14,9 @@ import os.path
 import json
 import subprocess
 
-# Path to prism team teammate script
-TEAMMATE = "/home/gsvance/prismtools/prism_team_teammate.py"
+# Full path to the Python PRISM team teammate script (part 2 of 3)
+# This is the file that needs to be executed in all the jobs we will submit
+PRISM_TEAM_TEAMMATE = "/home/gsvance/prismtools/prism_team_teammate.py"
 
 def main():
 	
@@ -28,12 +30,12 @@ def main():
 	temp_cut = float(info["temp cut"])
 	del info
 	
-	# Prepare files for each teammate job that needs dispatching
+	# Prepare the files for each teammate job that needs dispatching
 	job_script_file_names = list()
 	for team_rank in xrange(team_size):
 		
-		# Write a little JSON control file for each teammate job
-		inputs = {
+		# Write little JSON control files to keep each teammate job organized
+		json_contents = {
 			"sdf dir": sdf_dir,
 			"output dir": output_dir,
 			"team size": team_size,
@@ -43,23 +45,30 @@ def main():
 		json_file_name = os.path.join(output_dir, "teammate_%04d.json" \
 			% (team_rank))
 		with open(json_file_name, "w") as json_file:
-			json_file.dump(inputs, json_file)
+			json_file.dump(json_contents, json_file)
 		
-		# Write an sbatch job script for each teammate job
+		# Write an sbatch job script for submitting each teammate job
 		job_script_file_name = write_job_script(output_dir, json_file_name,
 			team_rank, job_time)
 		job_script_file_names.append(job_script_file_name)
+		
+		print "Wrote JSON and job script files for team rank %d of %d." \
+			% (team_rank, team_size)
 	
-	# Ask whether to submit the scripts
-	if not ask_user("Submit sbatch job scripts?"):
+	# This file should be run interactively, not as a cluster job
+	# Ask the user whether we want to actually submit the job scripts
+	if not ask_user("Submit sbatch job scripts to the cluster?"):
+		print "Aborting..."
 		return
 	
 	# Submit all the teammate job scripts using sbatch subprocesses
+	# Keep track of the exit codes to make sure this goes smoothly
 	for job_script_file_name in job_script_file_names:
 		exit_code = sbatch_submit(job_script_file_name)
 		while exit_code != 0:
-			print "Job submit failed, exit code %d" % (exit_code)
-			if not ask_user("Try again?"):
+			print "Job submit failed: exit code was %d" % (exit_code)
+			if not ask_user("Try to submit again?"):
+				print "Aborting..."
 				return
 			exit_code = sbatch_submit(job_script_file_name)
 
@@ -70,7 +79,7 @@ def get_dispatch_info():
 	"""
 	
 	# Check for the one command line argument that we want to see
-	# We're only expecting the name of a small input JSON file
+	# We are only expecting to get the name of a small input JSON file
 	if len(sys.argv) != 2:
 		raise TypeError("one command line argument is required: " \
 			+ "name of JSON dispatch info file")
@@ -93,7 +102,9 @@ def get_dispatch_info():
 		raise ValueError("output directory does not exist: %s" \
 			% (info["output dir"]))
 	if info["team size"] <= 0:
-		raise ValueError("team size must be a positive int")
+		raise ValueError("team size must be a positive integer")
+	if not set(info["job time"]).issubset(set("0123456789-:")):
+		raise ValueError("invalid slurm job time: %s" % (info["job time"]))
 	if info["temp cut"] < 0.0:
 		raise ValueError("bad temperature cutoff at %g K" \
 			% (info["temp cut"]))
@@ -101,15 +112,25 @@ def get_dispatch_info():
 	return info
 
 def write_job_script(output_dir, json_file_name, team_rank, job_time):
-	"""
+	"""Write an sbatch job script for submitting a single teammate job and
+	return the path to the newly created file. The job's stdout and stderr
+	files will be saved to the provided output directory. The teammate Python
+	script will be invoked with the name of the given JSON file as input when
+	the job runs. For file naming, please provide the rank of this teammate
+	job in the team. The job script will request the specified amount of wall
+	time from slurm, which should be specified as a slurm-compatible string,
+	e.g., "2-04:32" indicates 2 days, 4 hours, and 32 minutes.
 	"""
 	
+	# Put the job's stdout and stderr files in the output directory
+	# Name them based on the job's team rank and slurm job id
 	stdout_file_name = os.path.join(output_dir, "teammate_%04d.%%j.out" \
 		% (team_rank))
 	stderr_file_name = os.path.join(output_dir, "teammate_%04d.%%j.err" \
 		% (team_rank))
 	
-	script = [
+	# Contruct the contents of the script file using a list of strings
+	script_contents = [
 		"#!/bin/bash",
 		"",
 		"#SBATCH -n 1",
@@ -121,41 +142,43 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		"",
 		"module purge",
 		"",
-		"python %s %s" % (TEAMMATE, json_file_name),
+		"python %s %s" % (PRISM_TEAM_TEAMMATE, json_file_name),
 		""
 	]
 	
+	# Join the script contents together and write them to a file
 	job_script_file_name = os.path.join(output_dir, "teammate_%04d.sh" \
 		% (team_rank))
 	with open(job_script_file_name, "w") as job_script_file:
-		job_script_file.write("\n".join(script))
+		job_script_file.write("\n".join(script_contents))
 	
 	return job_script_file_name
 
+def ask_user(question):
+	"""Prompt the user with a printed question, read their response, and
+	return whether the reply was "yes."
+	"""
+	
+	# Print the question, prompt for input, and then check the input
+	response = raw_input(question + " [y/n] ").lower()
+	return (response == "y" or response == "yes")
+
 def sbatch_submit(job_script_file_name, print_command=True):
 	"""Use a subprocess to submit a job script to the cluster with sbatch.
-	Return the exit code from the sbatch command
+	Return the exit code from the sbatch command. As usual with exit codes
+	from shell commands, 0 indicates success and nonzero indicates problems.
 	"""
 	
 	# Assemble the sbatch command that will submit the job script
 	sbatch_command = ["sbatch", job_script_file_name]
 	
-	# Print the command right before running it if the flag is set
+	# Print the command right before running it if the flag was set
 	if print_command:
 		print "$ " + " ".join(sbatch_command)
 	
 	# Run the command and return its exit code
 	exit_code = subprocess.call(sbatch_command)
 	return exit_code
-
-def ask_user(question):
-	"""Prompt the user with a question and return whether their response was
-	"yes."
-	"""
-	
-	# Print the question, prompt for input, and then check the input
-	response = raw_input(question + " [y/n] ").lower()
-	return (response == "y" or response == "yes")
 
 main()
 
