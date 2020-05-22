@@ -5,13 +5,16 @@
 # Goal 3: organize all the output from PRISM after the processing is done
 # This script is the setup program for submitting a team of teammate jobs
 
-# Last modified 16 May 2020 by Greg Vance
+# Last modified 21 May 2020 by Greg Vance
 
 import sys
 import os.path
 
 import json
 import subprocess
+
+# Path to prism team teammate script
+TEAMMATE = "/home/gsvance/prismtools/prism_team_teammate.py"
 
 def main():
 	
@@ -21,6 +24,7 @@ def main():
 	sdf_dir = os.path.abspath(info["sdf dir"])
 	output_dir = os.path.abspath(info["output_dir"])
 	team_size = int(info["team size"])
+	job_time = str(info["job time"])
 	temp_cut = float(info["temp cut"])
 	del info
 	
@@ -34,7 +38,8 @@ def main():
 			"output dir": output_dir,
 			"team size": team_size,
 			"team rank": team_rank,
-			"temp cut": temp_cut}
+			"temp cut": temp_cut
+		}
 		json_file_name = os.path.join(output_dir, "teammate_%04d.json" \
 			% (team_rank))
 		with open(json_file_name, "w") as json_file:
@@ -42,12 +47,21 @@ def main():
 		
 		# Write an sbatch job script for each teammate job
 		job_script_file_name = write_job_script(output_dir, json_file_name,
-			team_rank)
+			team_rank, job_time)
 		job_script_file_names.append(job_script_file_name)
+	
+	# Ask whether to submit the scripts
+	if not ask_user("Submit sbatch job scripts?"):
+		return
 	
 	# Submit all the teammate job scripts using sbatch subprocesses
 	for job_script_file_name in job_script_file_names:
-		sbatch_submit(job_script_file_name)
+		exit_code = sbatch_submit(job_script_file_name)
+		while exit_code != 0:
+			print "Job submit failed, exit code %d" % (exit_code)
+			if not ask_user("Try again?"):
+				return
+			exit_code = sbatch_submit(job_script_file_name)
 
 def get_dispatch_info():
 	"""Parse this script's single command line argument, read in the dispatch
@@ -86,16 +100,30 @@ def get_dispatch_info():
 	
 	return info
 
-def write_job_script(output_dir, json_file_name, team_rank):
+def write_job_script(output_dir, json_file_name, team_rank, job_time):
 	"""
 	"""
+	
+	stdout_file_name = os.path.join(output_dir, "teammate_%04d.%%j.out" \
+		% (team_rank))
+	stderr_file_name = os.path.join(output_dir, "teammate_%04d.%%j.err" \
+		% (team_rank))
 	
 	script = [
 		"#!/bin/bash",
 		"",
 		"#SBATCH -n 1",
+		"#SBATCH -t %s" % (job_time),
+		"#SBATCH -o %s" % (stdout_file_name),
+		"#SBATCH -e %s" % (stderr_file_name),
+		"#SBATCH --mail-type=ALL",
+		"#SBATCH --mail-user=gsvance@asu.edu",
+		"",
+		"module purge",
+		"",
+		"python %s %s" % (TEAMMATE, json_file_name),
 		""
-		]
+	]
 	
 	job_script_file_name = os.path.join(output_dir, "teammate_%04d.sh" \
 		% (team_rank))
@@ -119,6 +147,15 @@ def sbatch_submit(job_script_file_name, print_command=True):
 	# Run the command and return its exit code
 	exit_code = subprocess.call(sbatch_command)
 	return exit_code
+
+def ask_user(question):
+	"""Prompt the user with a question and return whether their response was
+	"yes."
+	"""
+	
+	# Print the question, prompt for input, and then check the input
+	response = raw_input(question + " [y/n] ").lower()
+	return (response == "y" or response == "yes")
 
 main()
 
