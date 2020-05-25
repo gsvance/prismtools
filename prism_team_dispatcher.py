@@ -6,7 +6,7 @@
 # This script is the setup program for submitting a team of teammate jobs
 # Run this script interactively!
 
-# Last modified 22 May 2020 by Greg Vance
+# Last modified 25 May 2020 by Greg Vance
 
 import sys
 import os.path
@@ -24,7 +24,7 @@ def main():
 	
 	# Process the inputs a little bit and store them in new variables
 	sdf_dir = os.path.abspath(info["sdf dir"])
-	output_dir = os.path.abspath(info["output_dir"])
+	output_dir = os.path.abspath(info["output dir"])
 	team_size = int(info["team size"])
 	job_time = str(info["job time"])
 	temp_cut = float(info["temp cut"])
@@ -45,7 +45,8 @@ def main():
 		json_file_name = os.path.join(output_dir, "teammate_%04d.json" \
 			% (team_rank))
 		with open(json_file_name, "w") as json_file:
-			json_file.dump(json_contents, json_file)
+			json.dump(json_contents, json_file, indent=2,
+				separators=(",", ": "))
 		
 		# Write an sbatch job script for submitting each teammate job
 		job_script_file_name = write_job_script(output_dir, json_file_name,
@@ -141,6 +142,8 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		"#SBATCH --mail-user=gsvance@asu.edu",
 		"",
 		"module purge",
+		"module load numpy/python-2x",  # for running Numpy code
+		"module load intel/2017x",  # for running PRISM executable
 		"",
 		"python %s %s" % (PRISM_TEAM_TEAMMATE, json_file_name),
 		""

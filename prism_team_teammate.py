@@ -6,7 +6,7 @@
 # This script is tasked with running all of the PRISM jobs assigned to it
 # Run this script as a non-interactive cluster job!
 
-# Last modified 22 May 2020 by Greg Vance
+# Last modified 25 May 2020 by Greg Vance
 
 import sys
 import os
@@ -14,6 +14,8 @@ import time
 
 import json
 import subprocess
+
+import numpy as np
 
 import sdf_to_prism_translation as s2p
 
@@ -31,8 +33,8 @@ PRISM_DIR = "/home/gsvance/prism/prism-1.5.0/"
 DEFAULT_CONTROL = os.path.join(PRISM_DIR, "input/control.json")
 
 # Flags to set for debug testing
-PARTICLES_LIMIT = 4  # stop after processing some number of particles
-DELETE_FILES = False  # whether to clean up files as we go or not
+PARTICLES_LIMIT = None  # stop after processing some number of particles
+DELETE_FILES = True  # whether to clean up files as we go or not
 
 def main():
 	
@@ -78,7 +80,7 @@ def main():
 	print "Setup procedure is complete."
 	t2 = time.time()
 	t_setup = t2 - t1
-	print "The setup took %.3f minutes to finish." % (t_setup / 60.)
+	print "The setup took %.2f minutes to finish." % (t_setup / 60.)
 	print
 	
 	################################
@@ -136,10 +138,12 @@ def main():
 			print "Copying initial composition directly to output file..."
 			fcomposition_file_name = write_fake_output_file(particle_id,
 				translator, output_dir)
+			print "Data was copied."
 		
 		# Consolidate the latest output data into our big output data file
 		print "Consolidating final composition data into big file..."
-		consolidate(particle_id, fcomposition_file_name, data_file_name)
+		consolidate(particle_id, particle_is_hot[particle_index],
+			fcomposition_file_name, data_file_name)
 		print "Consolidation completed."
 		
 		n_loops += 1
@@ -151,8 +155,8 @@ def main():
 	t3 = time.time()
 	t_loop = t3 - t2
 	t_total = t3 - t1
-	print "The main loop took %.3f minutes to run." % (t_loop / 60.)
-	print "The entire program with setup took %.3f minutes to run." \
+	print "The main loop took %.2f minutes to run." % (t_loop / 60.)
+	print "The entire program with setup took %.2f minutes to run." \
 		% (t_total / 60.)
 	print
 	
@@ -341,19 +345,26 @@ def write_fake_output_file(particle_id, translator, output_dir):
 	
 	return fcomposition_file_name
 
-def consolidate(particle_id, fcomposition_file_name, data_file_name):
+def consolidate(particle_id, is_hot, fcomposition_file_name, data_file_name):
 	"""Consolidate the latest final composition file from PRISM into a big
 	data file that consolidates everything we've done so far. Open the data
 	file in append mode, then append the particle id and all the data from the
-	final composition file.
+	final composition file. Mark the particle id with a small string depending
+	on whether it was processed by PRISM.
 	"""
+	
+	# Check that the final composition file exists before doing anything
+	# If it doesn't exist, it's probably because PRISM failed somehow
+	if not os.path.exists(fcomposition_file_name):
+		return
 	
 	# Open final composition file for reading and data file for appending
 	fcomposition_file = open(fcomposition_file_name, "r")
 	data_file = open(data_file_name, "a")
 	
 	# Write the particle id to the data file, then write the composition lines
-	data_file.write("%s\n" % (particle_id))
+	label = ("prism" if is_hot else "abun")
+	data_file.write("%s %s\n" % (particle_id, label))
 	for line in fcomposition_file:
 		stripped = line.strip()
 		if stripped != "":
