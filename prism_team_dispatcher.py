@@ -146,7 +146,7 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		"module load intel/2017x",  # for running PRISM executable
 		"",
 		"python %s %s" % (PRISM_TEAM_TEAMMATE, json_file_name),
-		""
+		"", ""
 	]
 	
 	# Join the script contents together and write them to a file
