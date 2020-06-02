@@ -6,7 +6,7 @@
 # This script is tasked with running all of the PRISM jobs assigned to it
 # Run this script as a non-interactive cluster job!
 
-# Last modified 25 May 2020 by Greg Vance
+# Last modified 2 Jun 2020 by Greg Vance
 
 import sys
 import os
@@ -32,6 +32,10 @@ PRISM_DIR = "/home/gsvance/prism/prism-1.5.0/"
 # Path to the default control.json file that came with PRISM
 DEFAULT_CONTROL = os.path.join(PRISM_DIR, "input/control.json")
 
+# Amount of time to use as a "safety wait" after a PRISM subprocess completes
+# This is to make sure that PRISM has time to finish writing its output files
+SAFETY_WAIT = 1.0 # seconds
+
 # Flags to set for debug testing
 PARTICLES_LIMIT = None  # stop after processing some number of particles
 DELETE_FILES = True  # whether to clean up files as we go or not
@@ -41,8 +45,9 @@ def main():
 	# Start timer and print welcome messages
 	t1 = time.time()
 	print "<< PRISM Parallelization Teammate Script >>"
-	print "Beginning setup procedure..."
+	print "Beginning setup..."
 	print
+	flush()
 	
 	parameters = read_input_parameters()
 	
@@ -55,33 +60,44 @@ def main():
 	del parameters
 	
 	# Print our team teammate status as we understand it
-	print "This job is assigned to run team rank %d of team size %d." \
+	print "Assigned to run team rank %d of team size %d." \
 		% (team_rank, team_size)
 	print
 	
 	# Set up the data translator object... this can take a while to do
 	# Only need to do this once, so it should be a small part of the runtime
-	print "Initializing SDF-to-PRISM data translator object..."
+	print "Initializing SDF-to-PRISM translator..."
 	translator = s2p.SdfToPrismTranslator(sdf_dir)
-	print "Translator object is constructed and ready to proceed."
+	print "Translator object is ready."
 	
 	# Get the full array of particle ids from the translator
 	particle_ids = translator.get_particle_ids()
-	print "SDF directory has data for %d particles." % (particle_ids.size)
+	print "SDF directory has %d particles." % (particle_ids.size)
 	
 	# Impose a temperature cutoff to limit the number of necessary PRISM runs
 	print "Imposing temperature cutoff at %.3E kelvin..." % (temp_cut)
 	particle_is_hot = translator.impose_temperature_cutoff(temp_cut)
-	print "Found %d particles that will require processing by PRISM." \
+	print "Found %d \"hot\" particles that will require PRISM." \
 		% (np.sum(particle_is_hot))
 	print
 	
+	# Print out a summary of this script's workload
+	my_range = np.arange(team_rank, particle_ids.size, team_size)
+	my_n_part = my_range.size
+	my_n_hot = np.sum(particle_is_hot[my_range])
+	my_n_cold = np.sum(np.logical_not(particle_is_hot[my_range]))
+	print "Script workload: %d particles (%d hot and %d cold)." \
+		% (my_n_part, my_n_hot, my_n_cold)
+	print "Percent hot particles: %.1f%%." % ((100. * my_n_hot) / my_n_part)
+	print
+	
 	# Conclude the setup and report the amount of time it consumed
-	print "Setup procedure is complete."
+	print "Setup procedure complete."
 	t2 = time.time()
 	t_setup = t2 - t1
-	print "The setup took %.2f minutes to finish." % (t_setup / 60.)
+	print "Setup runtime was %.2f minutes." % (t_setup / 60.)
 	print
+	flush()
 	
 	################################
 	##### SETUP CODE ENDS HERE #####
@@ -98,69 +114,88 @@ def main():
 	data_file_name = os.path.join(output_dir, "teammate_%04d.dat" \
 		% (team_rank))
 	open(data_file_name, "w").close()
-	print "Consolidation data file name: %s" % (data_file_name)
+	print "Consolidation data file name:\n%s" % (data_file_name)
 	
 	# Loop over all the particles that were assigned to this teammate
 	# THE RULE HERE: We are responsible for every index in the particle id
 	# array that is congruent to our team_rank (modulo team_size).
 	# Example: team_rank = 6, team_size = 10
 	# We would take the particles at indices 6, 16, 26, 36, 46, ...
-	print "Starting main loop over assigned particle ids..."
+	print "Looping over assigned particle ids..."
 	print
-	n_loops = 0
+	flush()
+	n_loops, n_hot, n_cold = 0, 0, 0
 	for particle_index in xrange(team_rank, particle_ids.size, team_size):
 		
 		# If a debug limit was set on the number of particles, then check that
 		if PARTICLES_LIMIT is not None and n_loops >= PARTICLES_LIMIT:
-			print "Main loop reached PARTICLES_LIMIT debug value."
-			print "Breaking out of main loop now."
+			print "Loop reached PARTICLES_LIMIT debug value."
+			print "Breaking loop now..."
 			print
 			break
 		
 		particle_id = particle_ids[particle_index]
-		print "Now considering particle id %08d at index %d in array." \
+		print "Considering particle id %08d at array index %d." \
 			% (particle_id, particle_index)
 		
 		# If this particle needs post-processing, then go ahead and run PRISM
 		if particle_is_hot[particle_index]:
-			print "This particle will require processing by PRISM."
-			print "Preparing files needed by PRISM..."
+			print "Particle will require processing by PRISM."
+			print "Preparing files for PRISM..."
 			file_names = prepare_prism_files(particle_id, translator,
 				output_dir)
-			print "Files are ready. Starting up PRISM subprocess..."
-			run_prism_once(particle_id, file_names)
-			print "PRISM subprocess has finished running."
+			print "Files ready."
+			print "Starting PRISM subprocess..."
+			tp1 = time.time()
+			prism_exit_code = run_prism_once(particle_id, file_names)
+			tp2 = time.time()
+			print "PRISM subprocess finished running."
+			print "PRISM runtime was %.2f minutes." % ((tp2 - tp1) / 60.)
 			fcomposition_file_name = file_names["final composition"]
+			n_hot += 1
 		
 		# If the particle does NOT need post-processing, then don't run PRISM
 		else:
-			print "This particle will NOT require any processing by PRISM."
-			print "Copying initial composition directly to output file..."
+			print "Particle will NOT require postprocessing."
+			print "Copying initial composition to fake output file..."
 			fcomposition_file_name = write_fake_output_file(particle_id,
 				translator, output_dir)
-			print "Data was copied."
+			prism_exit_code = None
+			print "Data copied."
+			n_cold +=1
 		
 		# Consolidate the latest output data into our big output data file
-		print "Consolidating final composition data into big file..."
+		print "Consolidating final composition data into larger file..."
 		consolidate(particle_id, particle_is_hot[particle_index],
-			fcomposition_file_name, data_file_name)
-		print "Consolidation completed."
+			fcomposition_file_name, data_file_name, prism_exit_code)
+		print "Consolidation complete."
 		
 		n_loops += 1
+		print "Processed %d particles so far (%d hot and %d cold)." \
+			% (n_loops, n_hot, n_cold)
 		print
+		flush()
 	
 	# The loop is done, so just finish up
-	print "Main loop is now complete."
-	print "A total of %d particles were considered in the loop." % (n_loops)
+	print "Loop complete."
+	print "Total: %d particles considered in loop (%d hot and %d cold)." \
+		% (n_loops, n_hot, n_cold)
 	t3 = time.time()
 	t_loop = t3 - t2
 	t_total = t3 - t1
-	print "The main loop took %.2f minutes to run." % (t_loop / 60.)
-	print "The entire program with setup took %.2f minutes to run." \
-		% (t_total / 60.)
+	print "Loop took %.2f hours to run." % (t_loop / 3600.)
+	print "Program (with setup) took %.2f hours to run." % (t_total / 3600.)
 	print
 	
-	print "Script execution is now complete. Bye!"
+	print "Script execution complete. Bye!"
+
+def flush():
+	"""Flush both the stdout and stderr file streams to make sure their
+	contents are saved to disk and not left buffered.
+	"""
+	
+	sys.stdout.flush()
+	sys.stderr.flush()
 
 def read_input_parameters():
 	"""Parse the script's command line argument, read the input parameters
@@ -180,7 +215,7 @@ def read_input_parameters():
 		parameters = json.load(json_file)
 	
 	# Pretty-print the input values we read from the file
-	print "Read parameters from input file:\n%s" % (json_file_name)
+	print "Parameters from input file:\n%s" % (json_file_name)
 	print json.dumps(parameters, indent=2, separators=(",", ": "))
 	print
 	
@@ -297,7 +332,7 @@ def run_prism_once(particle_id, file_names):
 	subprocess and run PRISM once. If all goes well, clean up any unneeded
 	files to avoid overwhelming the file system. If the exit code from PRISM
 	indicates a problem, print an alert and don't delete the files--they could
-	be important for manual debugging later.
+	be important for manual debugging later. Return PRISM's exit code.
 	"""
 	
 	# Open two file streams to catch the stdout and stderr from PRISM
@@ -309,6 +344,9 @@ def run_prism_once(particle_id, file_names):
 	command = ["./prism", "-c", file_names["control"]]
 	prism_exit_code = subprocess.call(command, stdout=stdout_file,
 		stderr=stderr_file)
+	
+	# Pause for a "safety wait" to ensure PRISM is actually done writing files
+	time.sleep(SAFETY_WAIT)
 	
 	# Close the file streams collecting stdout and stderr from PRISM
 	stdout_file.close()
@@ -329,6 +367,8 @@ def run_prism_once(particle_id, file_names):
 		os.remove(file_names["control"])
 		os.remove(file_names["prism stdout"])
 		os.remove(file_names["prism stderr"])
+	
+	return prism_exit_code
 
 def write_fake_output_file(particle_id, translator, output_dir):
 	"""To avoid running PRISM on cold particles, copy the initial composition
@@ -345,17 +385,24 @@ def write_fake_output_file(particle_id, translator, output_dir):
 	
 	return fcomposition_file_name
 
-def consolidate(particle_id, is_hot, fcomposition_file_name, data_file_name):
+def consolidate(particle_id, is_hot, fcomposition_file_name, data_file_name,
+	prism_exit_code):
 	"""Consolidate the latest final composition file from PRISM into a big
 	data file that consolidates everything we've done so far. Open the data
 	file in append mode, then append the particle id and all the data from the
 	final composition file. Mark the particle id with a small string depending
-	on whether it was processed by PRISM.
+	on whether it was processed by PRISM. If the PRISM exit code is None, that
+	means PRISM wasn't run.
 	"""
 	
-	# Check that the final composition file exists before doing anything
-	# If it doesn't exist, it's probably because PRISM failed somehow
-	if not os.path.exists(fcomposition_file_name):
+	# Before doing anything, double-check the final composition file
+	# If PRISM failed somehow, then the file might not exist
+	# If Python is going too fast, PRISM might not be done with it yet
+	# If PRISM isn't done, Python could just be reading an empty file...
+	ready = verify_file(fcomposition_file_name)
+	if not ready:
+		if prism_exit_code == 0 or prism_exit_code is None:
+			print "ALERT: FCOMPOSITION FILE PROBLEM WITH GOOD EXIT CODE"
 		return
 	
 	# Open final composition file for reading and data file for appending
@@ -375,6 +422,51 @@ def consolidate(particle_id, is_hot, fcomposition_file_name, data_file_name):
 	data_file.close()
 	if DELETE_FILES:
 		os.remove(fcomposition_file_name)
+
+def verify_file(file_name, wait_time=5.0, max_waits=6):
+	"""If the named file exists, can be read from, and contains at least one
+	non-whitespace character, then immediately return True. If any of these
+	tests fail, wait for the specified amount of wait time (in seconds) and
+	test the file once again. If the file fails more times than the maximum
+	number of waits, then return False.
+	"""
+	
+	# Count the number of times we have waited so far to keep track of timeout
+	# Start the counter at -1 so we can avoid waiting on the very first loop
+	waits = -1
+	while waits < max_waits:
+		
+		# If this isn't the very first loop, then wait a bit of time
+		if waits >= 0:
+			time.sleep(wait_time)
+		waits += 1
+		
+		# First, test that the file actually exists
+		# If it doesn't, then loop to the next wait
+		if not os.path.exists(file_name):
+			continue
+		
+		# Test that the file can be opened (and isn't being written to)
+		# If this raises and exception, loop ahead to the next wait
+		try:
+			f = open(file_name, "r+")
+			f.close()
+		except IOError:
+			continue
+		
+		# Finally, test that the file has useful contents
+		# If not, then loop ahead to the next wait
+		f = open(file_name, "r")
+		contents = f.read()
+		f.close()
+		if contents.strip() == "":
+			continue
+		
+		# If we reach here, we've passed all tests and can return True
+		return True
+	
+	# If we reach here, we've waited too many times and should return False
+	return False
 
 # This file is organized in the style of C--define functions, then call main
 main()

@@ -6,7 +6,7 @@
 # This script is the setup program for submitting a team of teammate jobs
 # Run this script interactively!
 
-# Last modified 25 May 2020 by Greg Vance
+# Last modified 2 Jun 2020 by Greg Vance
 
 import sys
 import os.path
@@ -125,10 +125,13 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 	
 	# Put the job's stdout and stderr files in the output directory
 	# Name them based on the job's team rank and slurm job id
-	stdout_file_name = os.path.join(output_dir, "teammate_%04d.%%j.out" \
+	stdout_file_name = os.path.join(output_dir, "teammate_%04d_%%j.out" \
 		% (team_rank))
-	stderr_file_name = os.path.join(output_dir, "teammate_%04d.%%j.err" \
+	stderr_file_name = os.path.join(output_dir, "teammate_%04d_%%j.err" \
 		% (team_rank))
+	
+	# Name the empty file that will flag when this script is running
+	flag_file_name = os.path.join(output_dir, "runflag_%04" % (team_rank))
 	
 	# Contruct the contents of the script file using a list of strings
 	script_contents = [
@@ -141,11 +144,15 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		"#SBATCH --mail-type=ALL",
 		"#SBATCH --mail-user=gsvance@asu.edu",
 		"",
+		"touch %s" % (flag_file_name),
+		"",
 		"module purge",
 		"module load numpy/python-2x",  # for running Numpy code
 		"module load intel/2017x",  # for running PRISM executable
 		"",
 		"python %s %s" % (PRISM_TEAM_TEAMMATE, json_file_name),
+		"",
+		"rm %s" % (flag_file_name),
 		"", ""
 	]
 	
