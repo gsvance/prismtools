@@ -1,7 +1,7 @@
 # Python code for translating SNSPH SDF data into input files for PRISM
 # A necessary step if we want to use PRISM for postprocessing SNSPH particles
 
-# Last modified 16 May 2020 by Greg Vance
+# Last modified 18 Jun 2020 by Greg Vance
 
 import os.path
 import glob
@@ -463,11 +463,14 @@ class SdfToPrismTranslator:
 	
 	# Translation methods for producing PRISM inputs
 	
-	def write_initial_composition_file(self, particle_id, output_file_name):
+	def write_initial_composition_file(self, particle_id,
+		output_file_name=None):
 		"""Given a particle id and an ouput file name, write a PRISM "initial
 		composition" file detailing the initial composition of that particle
 		by matching the particle id with the correct zone abundances from the
-		1d progenitor model.
+		1d progenitor model. Returns None under most circumstances, but if no
+		output file name is given, returns the would-be file contents as a
+		structured numpy array.
 		"""
 		
 		# First, match the particle id with the correct 1d zone index
@@ -479,37 +482,52 @@ class SdfToPrismTranslator:
 		composition_tuples = self.abun.construct_zone_abun(zone_index,
 			prism_format)
 		
-		# Convert the tuples to simple space-delimited strings and join them
-		composition_strings = list()
-		for Z_A_X in composition_tuples:
-			string = "%d %d %.6E" % Z_A_X
-			composition_strings.append(string)
-		output = "\n".join(composition_strings)
+		# If any output file name was given, default to writing to that file
+		if output_file_name is not None:
+			
+			# Convert tuples to simple space-delimited strings and join them
+			composition_strings = list()
+			for Z_A_X in composition_tuples:
+				string = "%d %d %.6E" % Z_A_X
+				composition_strings.append(string)
+			output = "\n".join(composition_strings)
+			
+			# Write the final string of data to the output file
+			with open(output_file_name, "w") as output_file:
+				output_file.write(output)
 		
-		# Write the final string of data to the output file
-		with open(output_file_name, "w") as output_file:
-			output_file.write(output)
+		# With no output file name, return data as a structured numpy array
+		else:
+			struct_type = {"names": ("Z", "A", "X"),
+				"formats": ("int32", "int32", "float32")}
+			return np.array(composition_tuples, struct_type)
 	
-	def write_trajectory_file(self, particle_id, output_file_name,
+	def write_trajectory_file(self, particle_id, output_file_name=None,
 		HEADER=None):
 		"""Given a particle ID and an output file name, write a PRISM
 		"trajectory" file detailing the thermodynamic evolution of that
 		particle by extracting the temperature and density of that particle
 		from each SDF along with that SDF's simulation time. PRISM trajectory
 		files are allowed to begin with a single HEADER line of arbitrary
-		length that will be ignored by PRISM.
+		length that will be ignored by PRISM. Returns None under most
+		circumstances, but if no output file name is given, HEADER is ignored
+		and method returns the would-be file contents as a structured numpy
+		array.
 		"""
 		
-		# Default HEADER if none is provided
-		if HEADER is None:
-			HEADER = "PRISM Trajectory (t, T9, RHO) for Particle ID %d" \
-				% (particle_id)
-		
-		# Ensure that the HEADER is exactly one single line
-		if HEADER != "" and HEADER[-1] == '\n':
-			HEADER = HEADER[:-1]
-		if HEADER.count('\n') != 0:
-			raise ValueError("PRISM trajectory file HEADER must be one line")
+		# If there's going to be an output file, cope with the HEADER details
+		if output_file_name is not None:
+			
+			# Default HEADER if none is provided
+			if HEADER is None:
+				HEADER = "PRISM Trajectory (t, T9, RHO) for Particle ID %d" \
+					% (particle_id)
+			
+			# Ensure that the HEADER is exactly one single line
+			if HEADER != "" and HEADER[-1] == '\n':
+				HEADER = HEADER[:-1]
+			if HEADER.count('\n') != 0:
+				raise ValueError("PRISM traj file HEADER must be one line")
 		
 		# Pull the tpos value, particle temp, and particle rho from each SDF
 		sdf_trajectory_tuples = list()
@@ -532,16 +550,25 @@ class SdfToPrismTranslator:
 			RHO = rho * (1E-6 * MSUN * RSUN ** -3)  # g/cm3 per SNSPH_DENSITY
 			trajectory_tuples.append((t, T9, RHO))
 		
-		# Convert the tuples to simple space-delimited strings and join them
-		trajectory_strings = [HEADER]
-		for t_T9_RHO in trajectory_tuples:
-			string = "%.8E %.8E %.8E" % t_T9_RHO
-			trajectory_strings.append(string)
-		output = "\n".join(trajectory_strings)
+		# Typical behavior: if output file name given, write data to that file
+		if output_file_name is not None:
+			
+			# Convert tuples to simple space-delimited strings and join them
+			trajectory_strings = [HEADER]
+			for t_T9_RHO in trajectory_tuples:
+				string = "%.8E %.8E %.8E" % t_T9_RHO
+				trajectory_strings.append(string)
+			output = "\n".join(trajectory_strings)
+			
+			# Write the final string of data to the output file
+			with open(output_file_name, "w") as output_file:
+				output_file.write(output)
 		
-		# Write the final string of data to the output file
-		with open(output_file_name, "w") as output_file:
-			output_file.write(output)
+		# With no output file name, return data as a structured numpy array
+		else:
+			struct_type = {"names": ("t", "T9", "RHO"),
+				"formats": ("float32", "float32", "float32")}
+			return np.array(trajectory_tuples, struct_type)
 
 # If this file is being executed instead of imported, run a few tests
 if __name__ == "__main__":
