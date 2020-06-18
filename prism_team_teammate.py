@@ -447,7 +447,7 @@ def verify_file(file_name, wait_time=5.0, max_waits=6):
 			continue
 		
 		# Test that the file can be opened (and isn't being written to)
-		# If this raises and exception, loop ahead to the next wait
+		# If this raises an exception, loop ahead to the next wait
 		try:
 			f = open(file_name, "r+")
 			f.close()

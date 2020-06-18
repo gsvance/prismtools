@@ -131,7 +131,7 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		% (team_rank))
 	
 	# Name the empty file that will flag when this script is running
-	flag_file_name = os.path.join(output_dir, "runflag_%04" % (team_rank))
+	flag_file_name = os.path.join(output_dir, "runflag_%04d" % (team_rank))
 	
 	# Contruct the contents of the script file using a list of strings
 	script_contents = [
@@ -141,7 +141,7 @@ def write_job_script(output_dir, json_file_name, team_rank, job_time):
 		"#SBATCH -t %s" % (job_time),
 		"#SBATCH -o %s" % (stdout_file_name),
 		"#SBATCH -e %s" % (stderr_file_name),
-		"#SBATCH --mail-type=ALL",
+		"#SBATCH --mail-type=END,FAIL",
 		"#SBATCH --mail-user=gsvance@asu.edu",
 		"",
 		"touch %s" % (flag_file_name),
