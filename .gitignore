@@ -4,3 +4,6 @@
 # Test files
 test/
 
+# Problem particle checkers
+problem_particles/
+

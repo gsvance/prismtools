@@ -3,5 +3,5 @@
   "output dir": "/home/gsvance/vconv_3d_asym_data/vconv_prism_postprocess/",
   "hdf5 dir": "/home/gsvance/vconv_3d_asym_data/vconv_prism_hdf5/",
   "team size": 200,
-  "hdf5 count": 8
+  "hdf5 count": 32
 }
