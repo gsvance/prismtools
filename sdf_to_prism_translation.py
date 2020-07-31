@@ -504,7 +504,7 @@ class SdfToPrismTranslator:
 	
 	def write_trajectory_file(self, particle_id, output_file_name=None,
 		HEADER=None):
-		"""Given a particle ID and an output file name, write a PRISM
+		"""Given a particle id and an output file name, write a PRISM
 		"trajectory" file detailing the thermodynamic evolution of that
 		particle by extracting the temperature and density of that particle
 		from each SDF along with that SDF's simulation time. PRISM trajectory
@@ -569,6 +569,21 @@ class SdfToPrismTranslator:
 			struct_type = {"names": ("t", "T9", "RHO"),
 				"formats": ("float32", "float32", "float32")}
 			return np.array(trajectory_tuples, struct_type)
+
+	def find_particle_mass(self, particle_id):
+		"""Given a particle id, find and return that particle's mass as
+		recorded in the final SDF file. Mass will be converted to grams.
+		"""
+		
+		# Grab the last SDF file and find whether its particle ids are sorted
+		last_sdf = self.sdf_files[-1]
+		is_sorted = self.sdf_is_sorted[-1]
+		
+		# Look the particle up by its id, extract mass, and convert units
+		particle_index = find_one_index(last_sdf["ident"], particle_id,
+			assume_sorted=is_sorted)
+		particle_mass = last_sdf["mass"][particle_index]
+		return particle_mass * (1E-6 * MSUN)  # g per SNSPH_MASS
 
 # If this file is being executed instead of imported, run a few tests
 if __name__ == "__main__":
