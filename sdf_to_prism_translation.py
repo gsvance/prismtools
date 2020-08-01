@@ -588,7 +588,7 @@ class SdfToPrismTranslator:
 # If this file is being executed instead of imported, run a few tests
 if __name__ == "__main__":
 	
-	TEST_DIR = "/home/gsvance/vconv_3d_asym_data/vconv_snsph_data/"
+	TEST_DIR = "/home/gsvance/supernova_data/vconv/vconv_snsph/"
 	t = SdfToPrismTranslator(TEST_DIR)
 	
 	t.abun.get_network_size()

@@ -1,6 +1,6 @@
 {
-  "sdf dir": "/home/gsvance/vconv_3d_asym_data/vconv_snsph_data/",
-  "output dir": "/home/gsvance/vconv_3d_asym_data/vconv_prism_postprocess/",
+  "sdf dir": "/home/gsvance/supernova_data/vconv/vconv_snsph/",
+  "output dir": "/home/gsvance/supernova_data/vconv/vconv_prism/",
   "team size": 200,
   "job time": "2-00:00",
   "temp cut": 1E+8
