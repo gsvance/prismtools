@@ -10,6 +10,7 @@
 
 import sys
 import os
+import time as tm
 
 import json
 import glob
@@ -63,12 +64,18 @@ def main():
 	# Write them to the output HDF5 files until we run out of data
 	print "Transferring data to HDF5 files now..."
 	n_part = 0
+	t0 = tm.time()
 	data_block = data_files.get_next_data_block()
 	while data_block is not None:
 		hdf5_files.write_cycle(*data_block)
 		n_part += 1
 		if n_part % 1000 == 0:
-			print "  %d particles have been transferred" % (n_part)
+			print "  %d/%d particles transferred (%.0f%%)" % (n_part, \
+				len(particle_ids), n_part * 100.0 / len(particle_ids))
+			tn = tm.time()
+			speed = float(n_part) / (tn - t0)
+			t_left = (len(particle_ids) - n_part) / speed
+			print "  estimated %.0f minutes remaining" % (t_left / 60.0)
 		data_block = data_files.get_next_data_block()
 	print "All data transferred"
 	print
