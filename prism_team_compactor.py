@@ -6,7 +6,7 @@
 # This script exists to clean up all of the PRISM outputs after the fact
 # Probably best to run this script as an interactive job
 
-# Last modified 31 Jul 2020 by Greg Vance
+# Last modified 1 Aug 2020 by Greg Vance
 
 import sys
 import os
@@ -69,7 +69,7 @@ def main():
 	while data_block is not None:
 		hdf5_files.write_cycle(*data_block)
 		n_part += 1
-		if n_part % 1000 == 0:
+		if n_part % 5000 == 0:
 			print "  %d/%d particles transferred (%.0f%%)" % (n_part, \
 				len(particle_ids), n_part * 100.0 / len(particle_ids))
 			tn = tm.time()
@@ -220,6 +220,7 @@ class HDF5Group:
 			self.files.append(h5py.File(file_name, "w"))
 		
 		# Add the nz and nn datasets to each of the new HDF5 files
+		# Also set each file's "version" attributes (might be important)
 		sh = (len(self.isotopes),)
 		dt = np.dtype([("data", "int32")])
 		nz_array = np.empty(sh, dtype=dt)
@@ -229,6 +230,8 @@ class HDF5Group:
 		for hdf5 in self.files:
 			hdf5.create_dataset("nz", shape=sh, dtype=dt, data=nz_array)
 			hdf5.create_dataset("nn", shape=sh, dtype=dt, data=nn_array)
+			hdf5.attrs["HDF5_version"] = np.array(["1.8.2"], dtype="S6")
+			hdf5.attrs["SE_version"] = np.array(["1.2"], dtype="S4")
 			hdf5.flush()
 	
 	def find_file_index_by_particle_id(self, particle_id):
@@ -250,7 +253,6 @@ class HDF5Group:
 		# Create the new HDF5 group with the requisite "cycle#####" name
 		cycle_name = "cycle%010d" % (particle_id)
 		cycle = hdf5.create_group(cycle_name)
-		hdf5.flush()
 		
 		# Create the cycle's fmass dataset and fill it with numbers
 		s1 = (len(self.isotopes),)
@@ -258,7 +260,6 @@ class HDF5Group:
 		fmass_array = np.empty(s1, dtype=d1)
 		fmass_array["data"][:] = fmass
 		cycle.create_dataset("fmass", shape=s1, dtype=d1, data=fmass_array)
-		hdf5.flush()
 		
 		# Create the cycle's SE_DATASET and fill it with trajectory data
 		s2 = (len(time),)
@@ -269,14 +270,16 @@ class HDF5Group:
 		se_array["rho"][:] = rho
 		se_array["temp"][:] = temp
 		cycle.create_dataset("SE_DATASET", shape=s2, dtype=d2, data=se_array)
-		hdf5.flush()
 		
 		# Set the attributes... I don't know how many of these are necessary
-		# At the very least, the mass value is going to be needed
-		cycle.attrs["tfinal"] = np.array(np.nan, dtype="float64")
-		cycle.attrs["looperror"] = np.array(9999, dtype="int32")
-		cycle.attrs["mass"] = np.array(mass, dtype="float64")
-		hdf5.flush()
+		# At the very least, the mass value will be needed by burn_query
+		cycle.attrs["tfinal"] = np.array([99.9], dtype="float64")
+		cycle.attrs["looperror"] = np.array([999], dtype="int32")
+		cycle.attrs["mass"] = np.array([mass], dtype="float64")
+		
+		# Flush any extra data from the buffer and write it to the file
+		# Is this actually necessary?
+		#hdf5.flush()
 	
 	def close_all(self):
 		"""Close the full set of HDF5 files."""
@@ -296,6 +299,12 @@ class DataIter:
 		self.data_file_names = list(data_file_names)
 		self.translator = translator  # Big object, do not make a copy
 		self.isotopes = list(isotopes)
+		
+		# Set up the isotope index records for quick finding of isotopes
+		self.isotope_index_records = dict()
+		for i in xrange(len(self.isotopes)):
+			isotope = self.isotopes[i]
+			self.isotope_index_records[isotope] = i
 		
 		# Start reading the set of data files
 		self.file_index = 0
@@ -332,6 +341,11 @@ class DataIter:
 		# When we do get a file line, return it as a list of split parts
 		return line.strip().split()
 	
+	def find_isotope_index(self, isotope):
+		"""Find and return the list index of a given isotope tuple."""
+		
+		return self.isotope_index_records[isotope]
+	
 	def get_next_data_block(self):
 		"""Return the next full data block to be written to the output HDF5
 		files. Reads and combines data from several places to accomplish this.
@@ -351,7 +365,7 @@ class DataIter:
 		while line is not None and len(line) == 3:
 			Z, A, X = line
 			isotope = (int(Z), int(A) - int(Z))
-			isotope_index = self.isotopes.index(isotope)
+			isotope_index = self.find_isotope_index(isotope)
 			fmass_array[isotope_index] = float(X)
 			line = self.get_line()
 		
